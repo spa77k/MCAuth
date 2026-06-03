@@ -1,0 +1,9 @@
+# Paper にこのJARをプラグインとして認識させるための設定です。
+name: MCAuth
+version: 1.0.0
+# プラグイン起動時に最初に読み込まれるJavaクラスです。
+main: com.example.mcauth.MCAuthPlugin
+# 対応するPaper/Bukkit APIバージョンです。
+api-version: '1.21'
+author: spa
+description: Discord code-based whitelist authentication for Paper servers.

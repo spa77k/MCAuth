@@ -1,0 +1,33 @@
+# Discord Bot の設定です。
+discord:
+  # Discord Bot Token を入れます。GitHubには本物のTokenを絶対に載せないでください。
+  token: "PUT_DISCORD_BOT_TOKEN_HERE"
+  # 認証コードを受け付けるDiscordチャンネルIDを入れます。
+  channel-id: "PUT_CHANNEL_ID_HERE"
+
+# 認証コードと失敗制限の設定です。
+auth:
+  # 認証コードの桁数です。プログラム側では4から8桁に制限しています。
+  code-length: 6
+  # 認証コードの有効期限です。秒単位です。
+  code-expire-seconds: 300
+  # Discordでコードを何回間違えたら一時ロックするかです。
+  max-invalid-attempts: 5
+  # 一時ロックの長さです。秒単位です。
+  lockout-seconds: 60
+
+# プレイヤーやDiscordチャンネルに表示するメッセージです。
+messages:
+  # 未認証プレイヤーをキックするときにMinecraft側へ表示します。
+  # {code} は認証コードに置き換わります。
+  # {player} はMinecraftプレイヤー名に置き換わります。
+  kick: |-
+    Discord認証が必要です。
+    認証チャンネルに次のコードを送信してください: {code}
+  # 認証成功時にDiscordへ送ります。
+  # {player}, {uuid}, {discord} が使えます。
+  verified: "{player} を認証し、ホワイトリストに追加しました。"
+  # コードが無効または期限切れだったときにDiscordへ送ります。
+  invalid-code: "認証コードが無効、または期限切れです。"
+  # 間違えすぎて一時ロックされたときにDiscordへ送ります。
+  rate-limited: "認証コードの間違いが多すぎます。しばらく待ってから再試行してください。"
