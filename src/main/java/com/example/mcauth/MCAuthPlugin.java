@@ -194,6 +194,17 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    AuthenticatedPlayer revokeByDiscordUserId(String discordUserId) {
+        // Discord ID に紐づく認証を取り消します。
+        AuthenticatedPlayer revoked = store.deauthenticateByDiscordUserId(discordUserId);
+        if (revoked == null) {
+            return null;
+        }
+        // ホワイトリスト変更はメインスレッドで行います。
+        Bukkit.getScheduler().runTask(this, () -> removeFromWhitelist(revoked.uuid()));
+        return revoked;
+    }
+
     private void addToWhitelist(UUID uuid) {
         // UUID から OfflinePlayer を取得します。オフラインでもホワイトリスト追加できます。
         OfflinePlayer player = Bukkit.getOfflinePlayer(uuid);
@@ -204,6 +215,14 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         }
 
         // whitelist.json の内容をサーバーに再読み込みさせます。
+        Bukkit.reloadWhitelist();
+    }
+
+    private void removeFromWhitelist(UUID uuid) {
+        OfflinePlayer player = Bukkit.getOfflinePlayer(uuid);
+        if (player.isWhitelisted()) {
+            player.setWhitelisted(false);
+        }
         Bukkit.reloadWhitelist();
     }
 

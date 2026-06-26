@@ -2,6 +2,7 @@ package com.example.mcauth;
 
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
+import net.dv8tion.jda.api.events.guild.member.GuildMemberRemoveEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.GatewayIntent;
@@ -69,7 +70,8 @@ final class DiscordVerificationBot extends ListenerAdapter {
             // Token を使って Discord Bot としてログインします。
             jda = JDABuilder.createDefault(token)
                     // メッセージ本文を読むために必要な権限です。Discord Developer Portal 側でも有効化が必要です。
-                    .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT)
+                    // GUILD_MEMBERS は Privileged Intent のため、Developer Portal での有効化も必要です。
+                    .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT, GatewayIntent.GUILD_MEMBERS)
                     // このクラスの onMessageReceived が呼ばれるように登録します。
                     .addEventListeners(this)
                     .build();
@@ -134,6 +136,12 @@ final class DiscordVerificationBot extends ListenerAdapter {
         if (!invalidCodeMessage.isBlank()) {
             event.getChannel().sendMessage(invalidCodeMessage).queue();
         }
+    }
+
+    @Override
+    public void onGuildMemberRemove(@NotNull GuildMemberRemoveEvent event) {
+        // Discordサーバーを退出したユーザーの認証を取り消します。
+        plugin.revokeByDiscordUserId(event.getUser().getId());
     }
 
     private boolean isLockedOut(long discordUserId) {

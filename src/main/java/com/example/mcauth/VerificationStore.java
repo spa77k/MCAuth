@@ -93,6 +93,23 @@ final class VerificationStore {
         save();
     }
 
+    synchronized AuthenticatedPlayer deauthenticateByDiscordUserId(String discordUserId) {
+        // Discord ID が一致する認証済みエントリを探して削除します。
+        UUID found = null;
+        for (Map.Entry<UUID, AuthenticatedPlayer> entry : authenticatedPlayers.entrySet()) {
+            if (entry.getValue().discordUserId().equals(discordUserId)) {
+                found = entry.getKey();
+                break;
+            }
+        }
+        if (found == null) {
+            return null;
+        }
+        AuthenticatedPlayer removed = authenticatedPlayers.remove(found);
+        save();
+        return removed;
+    }
+
     synchronized Set<Map.Entry<UUID, AuthenticatedPlayer>> entries() {
         // 外部からMap本体を書き換えられないよう、コピーした読み取り専用Setを返します。
         return Collections.unmodifiableSet(Set.copyOf(authenticatedPlayers.entrySet()));
