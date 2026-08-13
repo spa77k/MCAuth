@@ -12,10 +12,10 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 // Paper が最初に読み込むプラグイン本体です。
 // Minecraft 側の接続チェック、認証コード発行、ホワイトリスト追加を担当します。
@@ -26,14 +26,16 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     // 設定ミスでコードが短すぎたり長すぎたりしないよう、許可する範囲を決めています。
     private static final int MIN_CODE_LENGTH = 4;
     private static final int MAX_CODE_LENGTH = 8;
+    private static final String DISCORD_TOKEN_ENV = "MCAUTH_DISCORD_TOKEN";
+    private static final String DISCORD_CHANNEL_ID_ENV = "MCAUTH_DISCORD_CHANNEL_ID";
 
     // key: 認証コード, value: そのコードで認証される予定のMinecraftプレイヤー情報。
     // Discord にコードが投稿されたとき、このMapから探します。
-    private final Map<String, PendingVerification> pendingCodes = new ConcurrentHashMap<>();
+    private final Map<String, PendingVerification> pendingCodes = new HashMap<>();
 
     // key: Minecraft UUID, value: 現在発行中の認証コード。
     // 同じプレイヤーが何度も接続しても、コードが無限に増えないようにします。
-    private final Map<UUID, String> pendingCodesByUuid = new ConcurrentHashMap<>();
+    private final Map<UUID, String> pendingCodesByUuid = new HashMap<>();
 
     // 認証済みプレイヤーを data.yml に保存・読み込みする担当です。
     private VerificationStore store;
@@ -68,7 +70,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         // 設定値を読み込みます。危険な値にならないよう、最低値や範囲を補正しています。
         codeLifetime = Duration.ofSeconds(Math.max(1, getConfig().getLong("auth.code-expire-seconds", 300)));
         codeLength = clamp(getConfig().getInt("auth.code-length", 6), MIN_CODE_LENGTH, MAX_CODE_LENGTH);
-        codeUpperBound = (int) Math.pow(10, codeLength);
+        codeUpperBound = powerOfTen(codeLength);
         kickMessage = getConfig().getString("messages.kick", "Discord認証が必要です。\n認証チャンネルに次のコードを送信してください: {code}");
         verifiedMessage = getConfig().getString("messages.verified", "{player} を認証し、ホワイトリストに追加しました。");
 
@@ -91,8 +93,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         }
 
         // 未認証コードは一時データなので、プラグイン停止時に破棄します。
-        pendingCodes.clear();
-        pendingCodesByUuid.clear();
+        clearPendingCodes();
     }
 
     @EventHandler
@@ -106,7 +107,6 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         }
 
         // 古いコードを消してから、このプレイヤー用のコードを作ります。
-        cleanupExpiredCodes();
         String code = createCode(event.getName(), uuid);
 
         // config.yml のメッセージ内にある {code} と {player} を実際の値に置き換えます。
@@ -126,40 +126,45 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
 
         // コードは1回使ったら消します。成功・失敗を問わず再利用されないようにするためです。
         PendingVerification verification = consumeCode(code);
+        Instant now = Instant.now();
 
         // 存在しないコード、または期限切れコードなら認証失敗です。
-        if (verification == null || verification.isExpired(Instant.now())) {
+        if (verification == null || verification.isExpired(now)) {
             return false;
         }
 
         // ホワイトリスト変更やファイル保存は Bukkit のメインスレッドで実行します。
-        Bukkit.getScheduler().runTask(this, () -> {
-            // Minecraft UUID と Discord ユーザー情報を data.yml に保存します。
-            store.authenticate(verification.uuid(), verification.playerName(), discordUserId, discordUserName);
-
-            // Paper/Minecraft 標準のホワイトリストへ追加します。
-            addToWhitelist(verification.uuid());
-
-            // 認証成功メッセージを作り、空文字でなければDiscordへ送信します。
-            String message = verifiedMessage
-                    .replace("{player}", verification.playerName())
-                    .replace("{uuid}", verification.uuid().toString())
-                    .replace("{discord}", discordUserName);
-            if (!message.isBlank()) {
-                channel.sendMessage(message).queue();
-            }
-        });
+        Bukkit.getScheduler().runTask(this,
+                () -> completeVerification(verification, channel, discordUserId, discordUserName));
         return true;
     }
 
+    private void completeVerification(
+            PendingVerification verification,
+            MessageChannel channel,
+            String discordUserId,
+            String discordUserName
+    ) {
+        store.authenticate(verification.uuid(), verification.playerName(), discordUserId, discordUserName);
+        addToWhitelist(verification.uuid());
+
+        String message = verifiedMessage
+                .replace("{player}", verification.playerName())
+                .replace("{uuid}", verification.uuid().toString())
+                .replace("{discord}", discordUserName);
+        if (!message.isBlank()) {
+            channel.sendMessage(message).queue();
+        }
+    }
+
     private void startDiscordBot() {
-        // Discord Bot Token と認証チャンネルIDを config.yml から読みます。
-        String token = getConfig().getString("discord.token", "");
-        String channelIdText = getConfig().getString("discord.channel-id", "");
+        // 環境変数を優先し、未設定なら config.yml へフォールバックします。
+        String token = environmentOrConfig(DISCORD_TOKEN_ENV, "discord.token", "");
+        String channelIdText = environmentOrConfig(DISCORD_CHANNEL_ID_ENV, "discord.channel-id", "").trim();
 
         // Token が未設定のままなら Bot は起動しません。
         if (token.isBlank() || token.equals("PUT_DISCORD_BOT_TOKEN_HERE")) {
-            getLogger().warning("Discord bot token is not configured. Set discord.token in config.yml.");
+            getLogger().warning("Discord bot token is not configured. Set MCAUTH_DISCORD_TOKEN or discord.token in config.yml.");
             return;
         }
 
@@ -168,7 +173,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         try {
             channelId = Long.parseUnsignedLong(channelIdText);
         } catch (NumberFormatException exception) {
-            getLogger().warning("Discord channel id is invalid. Set discord.channel-id in config.yml.");
+            getLogger().warning("Discord channel id is invalid. Set MCAUTH_DISCORD_CHANNEL_ID or discord.channel-id in config.yml.");
             return;
         }
 
@@ -187,10 +192,18 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         discordBot.start(token);
     }
 
+    private String environmentOrConfig(String environmentName, String configPath, String defaultValue) {
+        String environmentValue = System.getenv(environmentName);
+        if (environmentValue != null && !environmentValue.isBlank()) {
+            return environmentValue;
+        }
+        return getConfig().getString(configPath, defaultValue);
+    }
+
     private void syncAuthenticatedWhitelist() {
         // data.yml に保存されている認証済みプレイヤー全員をホワイトリストへ反映します。
-        for (Map.Entry<UUID, AuthenticatedPlayer> entry : store.entries()) {
-            addToWhitelist(entry.getKey());
+        for (UUID uuid : store.authenticatedUuids()) {
+            addToWhitelist(uuid);
         }
     }
 
@@ -213,9 +226,6 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         if (!player.isWhitelisted()) {
             player.setWhitelisted(true);
         }
-
-        // whitelist.json の内容をサーバーに再読み込みさせます。
-        Bukkit.reloadWhitelist();
     }
 
     private void removeFromWhitelist(UUID uuid) {
@@ -223,15 +233,17 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         if (player.isWhitelisted()) {
             player.setWhitelisted(false);
         }
-        Bukkit.reloadWhitelist();
     }
 
     private synchronized String createCode(String playerName, UUID uuid) {
+        Instant now = Instant.now();
+        cleanupExpiredCodes(now);
+
         // 既にこのUUID向けの有効なコードがあるなら、それを再利用します。
         String existingCode = pendingCodesByUuid.get(uuid);
         if (existingCode != null) {
             PendingVerification existingVerification = pendingCodes.get(existingCode);
-            if (existingVerification != null && !existingVerification.isExpired(Instant.now())) {
+            if (existingVerification != null && !existingVerification.isExpired(now)) {
                 return existingCode;
             }
         }
@@ -242,10 +254,10 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         // コード衝突に備えて最大100回まで作り直します。
         for (int attempts = 0; attempts < 100; attempts++) {
             // 例: codeLength が6なら 000000 から 999999 の文字列を作ります。
-            String code = String.format("%0" + codeLength + "d", RANDOM.nextInt(codeUpperBound));
+            String code = nextCode();
 
             // このコードが誰のものか、有効期限はいつまでかを記録します。
-            PendingVerification verification = new PendingVerification(uuid, playerName, Instant.now().plus(codeLifetime));
+            PendingVerification verification = new PendingVerification(uuid, playerName, now.plus(codeLifetime));
 
             // まだ使われていないコードなら保存して返します。
             if (pendingCodes.putIfAbsent(code, verification) == null) {
@@ -255,6 +267,11 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         }
 
         throw new IllegalStateException("Failed to allocate a verification code");
+    }
+
+    private String nextCode() {
+        String value = Integer.toString(RANDOM.nextInt(codeUpperBound));
+        return "0".repeat(codeLength - value.length()) + value;
     }
 
     private synchronized PendingVerification consumeCode(String code) {
@@ -267,9 +284,8 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         return verification;
     }
 
-    private synchronized void cleanupExpiredCodes() {
+    private void cleanupExpiredCodes(Instant now) {
         // 現在時刻を基準に、期限切れコードをまとめて削除します。
-        Instant now = Instant.now();
         Iterator<Map.Entry<String, PendingVerification>> iterator = pendingCodes.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<String, PendingVerification> entry = iterator.next();
@@ -289,7 +305,20 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    private int clamp(int value, int min, int max) {
+    private synchronized void clearPendingCodes() {
+        pendingCodes.clear();
+        pendingCodesByUuid.clear();
+    }
+
+    private static int powerOfTen(int exponent) {
+        int result = 1;
+        for (int i = 0; i < exponent; i++) {
+            result *= 10;
+        }
+        return result;
+    }
+
+    private static int clamp(int value, int min, int max) {
         // value を min 以上 max 以下に丸めます。
         return Math.max(min, Math.min(max, value));
     }

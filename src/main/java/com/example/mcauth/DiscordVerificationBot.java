@@ -83,10 +83,12 @@ final class DiscordVerificationBot extends ListenerAdapter {
 
     void stop() {
         // プラグイン停止時に Discord との接続を閉じます。
-        if (jda != null) {
-            jda.shutdownNow();
-            jda = null;
+        JDA currentJda = jda;
+        jda = null;
+        if (currentJda != null) {
+            currentJda.shutdownNow();
         }
+        failedAttempts.clear();
     }
 
     @Override
@@ -108,7 +110,8 @@ final class DiscordVerificationBot extends ListenerAdapter {
         long discordUserId = event.getAuthor().getIdLong();
 
         // ロック中なら認証処理に進まず、待つようにメッセージを返します。
-        if (isLockedOut(discordUserId)) {
+        Instant now = Instant.now();
+        if (isLockedOut(discordUserId, now)) {
             if (!rateLimitedMessage.isBlank()) {
                 event.getChannel().sendMessage(rateLimitedMessage).queue();
             }
@@ -130,7 +133,7 @@ final class DiscordVerificationBot extends ListenerAdapter {
         }
 
         // 認証失敗なら失敗回数を増やします。
-        recordFailedAttempt(discordUserId);
+        recordFailedAttempt(discordUserId, now);
 
         // 無効なコードだったことをDiscordへ返します。
         if (!invalidCodeMessage.isBlank()) {
@@ -144,12 +147,17 @@ final class DiscordVerificationBot extends ListenerAdapter {
         plugin.revokeByDiscordUserId(event.getUser().getId());
     }
 
-    private boolean isLockedOut(long discordUserId) {
+    private boolean isLockedOut(long discordUserId, Instant now) {
         // そのDiscordユーザーの失敗状態を取り出します。
         FailedAttemptState state = failedAttempts.get(discordUserId);
 
         // 記録がない、またはロック期限を過ぎているならロックされていません。
-        if (state == null || state.lockedUntil().isBefore(Instant.now())) {
+        if (state == null) {
+            return false;
+        }
+
+        if (!state.lockedUntil().isAfter(now)) {
+            failedAttempts.remove(discordUserId, state);
             return false;
         }
 
@@ -157,13 +165,11 @@ final class DiscordVerificationBot extends ListenerAdapter {
         return state.count() >= maxInvalidAttempts;
     }
 
-    private void recordFailedAttempt(long discordUserId) {
+    private void recordFailedAttempt(long discordUserId, Instant now) {
         // Discordユーザーごとに失敗回数を数え、コードの総当たりをしにくくします。
         failedAttempts.compute(discordUserId, (id, current) -> {
-            Instant now = Instant.now();
-
             // 初回失敗、または前回のロック期限が切れている場合は1回目から数え直します。
-            if (current == null || current.lockedUntil().isBefore(now)) {
+            if (current == null || !current.lockedUntil().isAfter(now)) {
                 return new FailedAttemptState(1, now.plus(lockoutDuration));
             }
 

@@ -7,8 +7,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -16,6 +16,8 @@ import java.util.logging.Level;
 
 // 認証済みプレイヤーを plugins/MCAuth/data.yml に保存・読み込みするクラスです。
 final class VerificationStore {
+    private static final String AUTHENTICATED_PATH = "authenticated";
+
     // ログ出力やプラグインフォルダ取得に使います。
     private final JavaPlugin plugin;
 
@@ -36,7 +38,7 @@ final class VerificationStore {
         authenticatedPlayers.clear();
 
         // data.yml がまだ無い場合は、保存済み認証者なしとして扱います。
-        if (!file.exists()) {
+        if (!file.isFile()) {
             return;
         }
 
@@ -44,7 +46,7 @@ final class VerificationStore {
         FileConfiguration data = YamlConfiguration.loadConfiguration(file);
 
         // data.yml の authenticated: 以下が認証済みプレイヤー一覧です。
-        ConfigurationSection section = data.getConfigurationSection("authenticated");
+        ConfigurationSection section = data.getConfigurationSection(AUTHENTICATED_PATH);
         if (section == null) {
             return;
         }
@@ -81,8 +83,12 @@ final class VerificationStore {
         }
 
         // 既に同じDiscordユーザーIDで認証済みのMinecraftアカウントがあるか探します。
-        return authenticatedPlayers.values().stream()
-                .anyMatch(player -> player.discordUserId().equals(discordUserId));
+        for (AuthenticatedPlayer player : authenticatedPlayers.values()) {
+            if (player.discordUserId().equals(discordUserId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     synchronized void authenticate(UUID uuid, String playerName, String discordUserId, String discordUserName) {
@@ -95,24 +101,21 @@ final class VerificationStore {
 
     synchronized AuthenticatedPlayer deauthenticateByDiscordUserId(String discordUserId) {
         // Discord ID が一致する認証済みエントリを探して削除します。
-        UUID found = null;
-        for (Map.Entry<UUID, AuthenticatedPlayer> entry : authenticatedPlayers.entrySet()) {
-            if (entry.getValue().discordUserId().equals(discordUserId)) {
-                found = entry.getKey();
-                break;
+        Iterator<Map.Entry<UUID, AuthenticatedPlayer>> iterator = authenticatedPlayers.entrySet().iterator();
+        while (iterator.hasNext()) {
+            AuthenticatedPlayer player = iterator.next().getValue();
+            if (player.discordUserId().equals(discordUserId)) {
+                iterator.remove();
+                save();
+                return player;
             }
         }
-        if (found == null) {
-            return null;
-        }
-        AuthenticatedPlayer removed = authenticatedPlayers.remove(found);
-        save();
-        return removed;
+        return null;
     }
 
-    synchronized Set<Map.Entry<UUID, AuthenticatedPlayer>> entries() {
-        // 外部からMap本体を書き換えられないよう、コピーした読み取り専用Setを返します。
-        return Collections.unmodifiableSet(Set.copyOf(authenticatedPlayers.entrySet()));
+    synchronized Set<UUID> authenticatedUuids() {
+        // ホワイトリスト同期にはUUIDだけを渡し、内部Mapの構造を公開しません。
+        return Set.copyOf(authenticatedPlayers.keySet());
     }
 
     private void save() {
@@ -120,7 +123,7 @@ final class VerificationStore {
         FileConfiguration data = new YamlConfiguration();
         for (Map.Entry<UUID, AuthenticatedPlayer> entry : authenticatedPlayers.entrySet()) {
             AuthenticatedPlayer player = entry.getValue();
-            String path = "authenticated." + entry.getKey();
+            String path = AUTHENTICATED_PATH + "." + entry.getKey();
 
             // 保存形式:
             // authenticated.<UUID>.name

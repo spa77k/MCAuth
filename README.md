@@ -41,8 +41,8 @@ target/mcauth-1.0.0.jar
 3. 認証用チャンネルでメッセージの読み取りと送信ができる権限を Bot に付与します。
 4. `target/mcauth-1.0.0.jar` を Paper サーバーの `plugins` フォルダに入れます。
 5. サーバーを一度起動します。
-6. 生成された `plugins/MCAuth/config.yml` を編集します。
-7. `discord.token` と `discord.channel-id` を設定します。
+6. 生成された `plugins/MCAuth/config.yml` を編集するか、Paper の起動環境に環境変数を設定します。
+7. `discord.token` と `discord.channel-id`、または `MCAUTH_DISCORD_TOKEN` と `MCAUTH_DISCORD_CHANNEL_ID` を設定します。
 8. サーバーを再起動します。
 
 ホワイトリストを実際に有効化するには、`server.properties` で次の設定も有効にしてください。
@@ -73,6 +73,17 @@ auth:
 - `auth.code-expire-seconds`: 認証コードの有効期限
 - `auth.max-invalid-attempts`: 何回間違えたら一時ロックするか
 - `auth.lockout-seconds`: 一時ロックする秒数
+
+### 環境変数
+
+次の環境変数を設定すると、対応する `config.yml` の値より優先されます。
+
+```dotenv
+MCAUTH_DISCORD_TOKEN=Botのトークン
+MCAUTH_DISCORD_CHANNEL_ID=認証チャンネルID
+```
+
+環境変数が未設定または空の場合は、`config.yml` にフォールバックします。`.env` ファイルを使う場合は、Paper を起動するシェルやサービスから環境変数として読み込んでください。MCAuth は `.env` ファイル自体を直接読みません。
 
 ## 使い方
 
