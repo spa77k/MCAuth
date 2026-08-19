@@ -145,7 +145,11 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
             String discordUserId,
             String discordUserName
     ) {
-        store.authenticate(verification.uuid(), verification.playerName(), discordUserId, discordUserName);
+        if (!store.authenticateIfAvailable(
+                verification.uuid(), verification.playerName(), discordUserId, discordUserName)) {
+            channel.sendMessage("このDiscordアカウントは、すでに別のMinecraftアカウントで認証済みです。").queue();
+            return;
+        }
         addToWhitelist(verification.uuid());
 
         String message = verifiedMessage

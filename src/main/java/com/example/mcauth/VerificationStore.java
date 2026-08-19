@@ -91,12 +91,18 @@ final class VerificationStore {
         return false;
     }
 
-    synchronized void authenticate(UUID uuid, String playerName, String discordUserId, String discordUserName) {
+    synchronized boolean authenticateIfAvailable(UUID uuid, String playerName, String discordUserId, String discordUserName) {
+        // 確認と保存を同じロック内で行い、同じDiscord IDの二重認証を防ぎます。
+        if (isDiscordUserAuthenticated(discordUserId)) {
+            return false;
+        }
+
         // Minecraft UUID と Discord ID を一緒に保存して、誰が認証したか後から確認できるようにします。
         authenticatedPlayers.put(uuid, new AuthenticatedPlayer(uuid, playerName, discordUserId, discordUserName));
 
         // メモリ上だけでなく data.yml にも書き込みます。
         save();
+        return true;
     }
 
     synchronized AuthenticatedPlayer deauthenticateByDiscordUserId(String discordUserId) {
