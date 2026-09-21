@@ -16,6 +16,8 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
+import java.util.logging.Level;
+import java.util.function.Consumer;
 
 // Paper が最初に読み込むプラグイン本体です。
 // Minecraft 側の接続チェック、認証コード発行、ホワイトリスト追加を担当します。
@@ -211,14 +213,39 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    AuthenticatedPlayer revokeByDiscordUserId(String discordUserId) {
+    void unlinkDiscordUser(String discordUserId, Consumer<String> reply) {
+        Bukkit.getScheduler().runTask(this, () -> {
+            try {
+                AuthenticatedPlayer revoked = revokeOnMainThread(discordUserId, true);
+                reply.accept(revoked == null
+                        ? "連携済みのMinecraftアカウントはありません。"
+                        : "Minecraftとの連携を解除しました。再連携するには、Minecraftサーバーへ接続して新しい認証コードを取得してください。");
+            } catch (RuntimeException exception) {
+                getLogger().log(Level.SEVERE, "Failed to unlink Minecraft account", exception);
+                reply.accept("連携解除を完了できませんでした。管理者にお問い合わせください。");
+            }
+        });
+    }
+
+    void revokeByDiscordUserId(String discordUserId) {
+        // 認証の確定と解除をメインスレッドで順番に処理します。
+        Bukkit.getScheduler().runTask(this, () -> revokeOnMainThread(discordUserId, false));
+    }
+
+    private AuthenticatedPlayer revokeOnMainThread(String discordUserId, boolean disconnect) {
         // Discord ID に紐づく認証を取り消します。
         AuthenticatedPlayer revoked = store.deauthenticateByDiscordUserId(discordUserId);
         if (revoked == null) {
             return null;
         }
-        // ホワイトリスト変更はメインスレッドで行います。
-        Bukkit.getScheduler().runTask(this, () -> removeFromWhitelist(revoked.uuid()));
+        removeCodeForUuid(revoked.uuid());
+        removeFromWhitelist(revoked.uuid());
+        if (disconnect) {
+            org.bukkit.entity.Player player = Bukkit.getPlayer(revoked.uuid());
+            if (player != null) {
+                player.kick(Component.text("Discordとの連携を解除しました。再接続してDiscord認証を行ってください。"));
+            }
+        }
         return revoked;
     }
 
@@ -301,7 +328,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    private void removeCodeForUuid(UUID uuid) {
+    private synchronized void removeCodeForUuid(UUID uuid) {
         // UUID から現在のコードを探し、両方のMapから削除します。
         String code = pendingCodesByUuid.remove(uuid);
         if (code != null) {

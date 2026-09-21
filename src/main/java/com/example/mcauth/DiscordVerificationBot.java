@@ -4,6 +4,8 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.events.guild.member.GuildMemberRemoveEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
+import net.dv8tion.jda.api.events.session.ReadyEvent;
+import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import org.jetbrains.annotations.NotNull;
@@ -89,6 +91,31 @@ final class DiscordVerificationBot extends ListenerAdapter {
             currentJda.shutdownNow();
         }
         failedAttempts.clear();
+    }
+
+    @Override
+    public void onReady(@NotNull ReadyEvent event) {
+        var channel = event.getJDA().getGuildChannelById(channelId);
+        if (channel == null) {
+            plugin.getLogger().warning("認証チャンネルが見つからないため /unlink を登録できません。");
+            return;
+        }
+        channel.getGuild().upsertCommand("unlink", "自分のMinecraft連携を解除し、接続中なら切断します")
+                .queue(command -> {}, error -> plugin.getLogger().log(Level.SEVERE, "Failed to register /unlink", error));
+    }
+
+    @Override
+    public void onSlashCommandInteraction(@NotNull SlashCommandInteractionEvent event) {
+        if (!event.getName().equals("unlink")) {
+            return;
+        }
+        if (!event.isFromGuild() || event.getChannel().getIdLong() != channelId) {
+            event.reply("認証チャンネルで /unlink を実行してください。").setEphemeral(true).queue();
+            return;
+        }
+        // 対象はコマンド実行者本人のみ。処理結果は本人だけに表示します。
+        event.deferReply(true).queue(hook -> plugin.unlinkDiscordUser(event.getUser().getId(),
+                message -> hook.editOriginal(message).queue()));
     }
 
     @Override

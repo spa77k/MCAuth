@@ -112,7 +112,10 @@ final class VerificationStore {
             AuthenticatedPlayer player = iterator.next().getValue();
             if (player.discordUserId().equals(discordUserId)) {
                 iterator.remove();
-                save();
+                if (!save()) {
+                    authenticatedPlayers.put(player.uuid(), player);
+                    throw new IllegalStateException("Failed to save unlink operation");
+                }
                 return player;
             }
         }
@@ -124,7 +127,7 @@ final class VerificationStore {
         return Set.copyOf(authenticatedPlayers.keySet());
     }
 
-    private void save() {
+    private boolean save() {
         // 新しいYAMLを作り、現在の認証済みプレイヤーをすべて書き込みます。
         FileConfiguration data = new YamlConfiguration();
         for (Map.Entry<UUID, AuthenticatedPlayer> entry : authenticatedPlayers.entrySet()) {
@@ -143,9 +146,11 @@ final class VerificationStore {
         try {
             // plugins/MCAuth/data.yml に保存します。
             data.save(file);
+            return true;
         } catch (IOException exception) {
             // ファイル権限などで保存できない場合はログに出します。
             plugin.getLogger().log(Level.SEVERE, "Failed to save data.yml", exception);
+            return false;
         }
     }
 }
