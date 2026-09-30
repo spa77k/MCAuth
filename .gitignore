@@ -1,0 +1,20 @@
+target/
+
+# Local Paper server runtime files. These can contain player data, logs, tokens,
+# whitelist contents, worlds, and other machine-specific state.
+paper/
+
+# Local secrets and environment files.
+.env
+.env.*
+*.env
+
+# Editor and OS files.
+.idea/
+.vscode/
+.DS_Store
+
+# Java build/runtime noise.
+*.class
+*.log
+hs_err_pid*
