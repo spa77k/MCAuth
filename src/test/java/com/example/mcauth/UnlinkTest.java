@@ -105,6 +105,10 @@ class UnlinkTest {
             map.setAccessible(true);
             map.set(plugin, new java.util.HashMap<>());
         }
+        DiscordVerificationBot bot = mock(DiscordVerificationBot.class);
+        var botField = MCAuthPlugin.class.getDeclaredField("discordBot");
+        botField.setAccessible(true);
+        botField.set(plugin, bot);
         MessageChannel channel = mock(MessageChannel.class, RETURNS_DEEP_STUBS);
         OfflinePlayer offline = mock(OfflinePlayer.class);
         Player online = mock(Player.class);
@@ -121,8 +125,10 @@ class UnlinkTest {
             verify(offline).setWhitelisted(false);
             verify(online).kick(any(net.kyori.adventure.text.Component.class));
             verify(channel).sendMessage(startsWith("Minecraftとの連携を解除しました。"));
+            verify(bot).removeVerifiedRole("123");
             plugin.unlinkDiscordUser("123", message -> channel.sendMessage(message).queue());
             verify(channel).sendMessage("連携済みのMinecraftアカウントはありません。");
+            verify(bot, times(1)).removeVerifiedRole(anyString());
         }
     }
 }

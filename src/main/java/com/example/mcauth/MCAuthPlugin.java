@@ -240,6 +240,10 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         Bukkit.getScheduler().runTask(this, () -> {
             try {
                 AuthenticatedPlayer revoked = revokeOnMainThread(discordUserId, true);
+                // 本人が解除したときは、認証で付けたロールも外します。
+                if (revoked != null && discordBot != null) {
+                    discordBot.removeVerifiedRole(discordUserId);
+                }
                 reply.accept(revoked == null
                         ? "連携済みのMinecraftアカウントはありません。"
                         : "Minecraftとの連携を解除しました。再連携するには、Minecraftサーバーへ接続して新しい認証コードを取得してください。");

@@ -252,23 +252,40 @@ final class DiscordVerificationBot extends ListenerAdapter {
     }
 
     void grantVerifiedRole(String discordUserId) {
-        // ロールが設定されていなければ何もしません。
+        Role role = verifiedRole();
+        if (role == null) {
+            return;
+        }
+        role.getGuild().addRoleToMember(UserSnowflake.fromId(discordUserId), role).queue(
+                ok -> {}, error -> plugin.getLogger().log(Level.SEVERE, "Failed to add verified role", error));
+    }
+
+    void removeVerifiedRole(String discordUserId) {
+        // 連携解除時に、認証で付けたロールを外します。
+        Role role = verifiedRole();
+        if (role == null) {
+            return;
+        }
+        role.getGuild().removeRoleFromMember(UserSnowflake.fromId(discordUserId), role).queue(
+                ok -> {}, error -> plugin.getLogger().log(Level.SEVERE, "Failed to remove verified role", error));
+    }
+
+    private Role verifiedRole() {
+        // ロールが設定されていなければ null を返します。
         JDA currentJda = jda;
         if (verifiedRoleId == 0 || currentJda == null) {
-            return;
+            return null;
         }
         GuildChannel channel = currentJda.getGuildChannelById(channelId);
         if (channel == null) {
-            return;
+            return null;
         }
         Guild guild = channel.getGuild();
         Role role = guild.getRoleById(verifiedRoleId);
         if (role == null) {
             plugin.getLogger().warning("認証後に付けるロールが見つかりません: " + verifiedRoleId);
-            return;
         }
-        guild.addRoleToMember(UserSnowflake.fromId(discordUserId), role).queue(
-                ok -> {}, error -> plugin.getLogger().log(Level.SEVERE, "Failed to add verified role", error));
+        return role;
     }
 
     private String invalidCodeText() {
