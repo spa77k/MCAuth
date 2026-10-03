@@ -1,6 +1,7 @@
 package com.example.mcauth;
 
 import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.entities.MessageEmbed;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -96,40 +97,42 @@ class WelcomeMessageTest {
         assertTrue(replies.getFirst().contains("保存できませんでした"));
     }
 
-    @Test void postsConfiguredTextToConfiguredChannelAndMentionsOnlyRecipient() throws Exception {
+    private static MessageEmbed embedWith(String description) {
+        return argThat(embed -> embed != null && description.equals(embed.getDescription()));
+    }
+
+    @Test void postsConfiguredTextAsEmbedToConfiguredChannel() throws Exception {
         var fixture = new Fixture();
         fixture.config.set("discord.welcome-channel-id", "99");
         fixture.config.set("messages.welcome", "{mention} さん、参加ありがとうございます！");
-        var action = mock(net.dv8tion.jda.api.requests.restaction.MessageCreateAction.class, RETURNS_SELF);
-        when(fixture.destination.sendMessage("<@123> さん、参加ありがとうございます！")).thenReturn(action);
         fixture.bot.sendWelcome("123");
-        verify(fixture.destination).sendMessage("<@123> さん、参加ありがとうございます！");
-        verify(action).setAllowedMentions(List.of());
-        verify(action).mentionUsers("123");
+        verify(fixture.destination).sendMessageEmbeds(embedWith("<@123> さん、参加ありがとうございます！"));
+        verify(fixture.destination, never()).sendMessage(anyString());
     }
 
     @Test void defaultsToRequestedChannelAndOmitsMinecraftName() throws Exception {
         var fixture = new Fixture();
         fixture.bot.sendWelcome("123");
         verify(fixture.jda).getGuildChannelById(1449580988597403651L);
-        verify(fixture.destination).sendMessage("<@123> さん、ようこそ！");
+        verify(fixture.destination).sendMessageEmbeds(embedWith("<@123> さん、ようこそ！"));
     }
 
     @Test void skipsDisabledAndOtherGuildDestinationsAndHandlesSendFailure() throws Exception {
         var fixture = new Fixture();
         fixture.config.set("discord.welcome-channel-id", "");
         fixture.bot.sendWelcome("123");
-        verify(fixture.destination, never()).sendMessage(anyString());
+        verify(fixture.destination, never()).sendMessageEmbeds(any(MessageEmbed.class));
         fixture.config.set("discord.welcome-channel-id", "99");
         fixture.config.set("messages.welcome", "");
         fixture.bot.sendWelcome("123");
-        verify(fixture.destination, never()).sendMessage(anyString());
+        verify(fixture.destination, never()).sendMessageEmbeds(any(MessageEmbed.class));
         fixture.config.set("messages.welcome", "{mention} ようこそ！");
         when(fixture.destination.getGuild().getIdLong()).thenReturn(2L);
         fixture.bot.sendWelcome("123");
-        verify(fixture.destination, never()).sendMessage(anyString());
+        verify(fixture.destination, never()).sendMessageEmbeds(any(MessageEmbed.class));
         when(fixture.destination.getGuild().getIdLong()).thenReturn(1L);
-        when(fixture.destination.sendMessage(anyString())).thenThrow(new IllegalStateException("missing access"));
+        when(fixture.destination.sendMessageEmbeds(any(MessageEmbed.class)))
+                .thenThrow(new IllegalStateException("missing access"));
         assertDoesNotThrow(() -> fixture.bot.sendWelcome("123"));
     }
 

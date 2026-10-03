@@ -1,5 +1,6 @@
 package com.example.mcauth;
 
+import net.dv8tion.jda.api.entities.MessageEmbed;
 import net.dv8tion.jda.api.events.interaction.ModalInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
 import net.dv8tion.jda.api.interactions.InteractionHook;
@@ -14,6 +15,10 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ButtonVerificationTest {
+    private static MessageEmbed embedWith(String description) {
+        return argThat(embed -> embed != null && description.equals(embed.getDescription()));
+    }
+
     private DiscordVerificationBot bot(MCAuthPlugin plugin, int maxInvalidAttempts) {
         return new DiscordVerificationBot(plugin, 42L, 6, maxInvalidAttempts,
                 Duration.ofSeconds(60), "invalid", "locked", "panel", 0L);
@@ -58,8 +63,8 @@ class ButtonVerificationTest {
             return null;
         }).when(history).queue(any(Consumer.class), any(Consumer.class));
         bot(plugin, 5).onReady(event);
-        verify(channel).sendMessage("panel");
-        verify(channel.sendMessage("panel")).setActionRow(
+        verify(channel).sendMessageEmbeds(embedWith("panel"));
+        verify(channel.sendMessageEmbeds(any(MessageEmbed.class))).setActionRow(
                 argThat((net.dv8tion.jda.api.interactions.components.ItemComponent c) ->
                         c instanceof net.dv8tion.jda.api.interactions.components.buttons.Button b
                                 && DiscordVerificationBot.VERIFY_BUTTON_ID.equals(b.getId())));
@@ -75,7 +80,7 @@ class ButtonVerificationTest {
         var other = button(99L);
         bot.onButtonInteraction(other);
         verify(other, never()).replyModal(any());
-        verify(other).reply("認証チャンネルのボタンを使ってください。");
+        verify(other).replyEmbeds(embedWith("認証チャンネルのボタンを使ってください。"));
     }
 
     @Test void formPassesNormalizedCodeAndReportsOnlyToSender() {
@@ -84,7 +89,7 @@ class ButtonVerificationTest {
         var hook = mock(InteractionHook.class, RETURNS_DEEP_STUBS);
         bot(plugin, 5).onModalInteraction(modal("１２３ ４５６", hook));
         verify(plugin).verifyCode(eq("123456"), eq("123"), eq("user"), any());
-        verify(hook, never()).editOriginal("invalid");
+        verify(hook, never()).editOriginalEmbeds(embedWith("invalid"));
     }
 
     @Test void wrongCodesLockTheFormButton() {
@@ -94,11 +99,11 @@ class ButtonVerificationTest {
         var hook = mock(InteractionHook.class, RETURNS_DEEP_STUBS);
         bot.onModalInteraction(modal("000000", hook));
         bot.onModalInteraction(modal("abc", hook));
-        verify(hook).editOriginal("invalid");
+        verify(hook).editOriginalEmbeds(embedWith("invalid"));
 
         var event = button(42L);
         bot.onButtonInteraction(event);
         verify(event, never()).replyModal(any());
-        verify(event).reply("locked");
+        verify(event).replyEmbeds(embedWith("locked"));
     }
 }

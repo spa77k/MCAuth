@@ -1,9 +1,11 @@
 package com.example.mcauth;
 
 import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.MessageEmbed;
 import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.requests.ErrorResponse;
@@ -28,7 +30,6 @@ import org.jetbrains.annotations.NotNull;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
-import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -43,6 +44,10 @@ final class DiscordVerificationBot extends ListenerAdapter {
     static final String VERIFY_BUTTON_ID = "mcauth:verify";
     static final String CODE_MODAL_ID = "mcauth:code-modal";
     static final String CODE_INPUT_ID = "code";
+
+    // Embed の帯の色です。通常は青、失敗や制限は赤にします。
+    private static final int INFO_COLOR = 0x5865F2;
+    private static final int ERROR_COLOR = 0xED4245;
 
     // Minecraft 側の処理を呼び出すために保持します。
     private final MCAuthPlugin plugin;
@@ -149,6 +154,15 @@ final class DiscordVerificationBot extends ListenerAdapter {
         }
     }
 
+    // Discord に出す文面は、基本すべて Embed にします。
+    static MessageEmbed embed(String text) {
+        return new EmbedBuilder().setDescription(text).setColor(INFO_COLOR).build();
+    }
+
+    static MessageEmbed errorEmbed(String text) {
+        return new EmbedBuilder().setDescription(text).setColor(ERROR_COLOR).build();
+    }
+
     static CompletableFuture<Boolean> retrieveMembership(Guild guild, String discordUserId) {
         return guild.retrieveMemberById(discordUserId).useCache(false).submit()
                 .handle((member, error) -> {
@@ -180,10 +194,11 @@ final class DiscordVerificationBot extends ListenerAdapter {
                     .findFirst()
                     .orElse(null);
             if (existing != null) {
-                existing.editMessage(panelMessage).setActionRow(button).queue(
+                // 以前の本文が残らないよう、本文は空にして Embed に置き換えます。
+                existing.editMessageEmbeds(embed(panelMessage)).setContent(null).setActionRow(button).queue(
                         ok -> {}, error -> plugin.getLogger().log(Level.SEVERE, "Failed to update verify panel", error));
             } else {
-                channel.sendMessage(panelMessage).setActionRow(button).queue(
+                channel.sendMessageEmbeds(embed(panelMessage)).setActionRow(button).queue(
                         ok -> {}, error -> plugin.getLogger().log(Level.SEVERE, "Failed to post verify panel", error));
             }
         }, error -> plugin.getLogger().log(Level.SEVERE, "Failed to read verify channel history", error));
@@ -195,12 +210,12 @@ final class DiscordVerificationBot extends ListenerAdapter {
             return;
         }
         if (!event.isFromGuild() || event.getChannel().getIdLong() != channelId) {
-            event.reply("認証チャンネルのボタンを使ってください。").setEphemeral(true).queue();
+            event.replyEmbeds(errorEmbed("認証チャンネルのボタンを使ってください。")).setEphemeral(true).queue();
             return;
         }
         // ロック中ならフォームを開かず、待つように本人へ伝えます。
         if (isLockedOut(event.getUser().getIdLong(), Instant.now())) {
-            event.reply(rateLimitedText()).setEphemeral(true).queue();
+            event.replyEmbeds(errorEmbed(rateLimitedText())).setEphemeral(true).queue();
             return;
         }
         // 区切りの空白やハイフン込みで貼り付けても入るよう、文字数の上限は桁数の倍にしています。
@@ -219,7 +234,7 @@ final class DiscordVerificationBot extends ListenerAdapter {
             return;
         }
         if (!event.isFromGuild() || event.getChannel().getIdLong() != channelId) {
-            event.reply("認証チャンネルのボタンを使ってください。").setEphemeral(true).queue();
+            event.replyEmbeds(errorEmbed("認証チャンネルのボタンを使ってください。")).setEphemeral(true).queue();
             return;
         }
 
@@ -227,7 +242,7 @@ final class DiscordVerificationBot extends ListenerAdapter {
         long discordUserId = event.getUser().getIdLong();
         Instant now = Instant.now();
         if (isLockedOut(discordUserId, now)) {
-            event.reply(rateLimitedText()).setEphemeral(true).queue();
+            event.replyEmbeds(errorEmbed(rateLimitedText())).setEphemeral(true).queue();
             return;
         }
 
@@ -237,7 +252,7 @@ final class DiscordVerificationBot extends ListenerAdapter {
         String code = value == null ? "" : CodeFormat.normalize(value.getAsString());
         if (!codePattern.matcher(code).matches()) {
             recordFailedAttempt(discordUserId, now);
-            event.reply(invalidCodeText()).setEphemeral(true).queue();
+            event.replyEmbeds(errorEmbed(invalidCodeText())).setEphemeral(true).queue();
             return;
         }
 
@@ -247,14 +262,14 @@ final class DiscordVerificationBot extends ListenerAdapter {
                     code,
                     event.getUser().getId(),
                     event.getUser().getName(),
-                    message -> hook.editOriginal(message).queue()
+                    message -> hook.editOriginalEmbeds(embed(message)).queue()
             );
             if (accepted) {
                 failedAttempts.remove(discordUserId);
                 return;
             }
             recordFailedAttempt(discordUserId, now);
-            hook.editOriginal(invalidCodeText()).queue();
+            hook.editOriginalEmbeds(errorEmbed(invalidCodeText())).queue();
         });
     }
 
@@ -266,7 +281,7 @@ final class DiscordVerificationBot extends ListenerAdapter {
         // 認証後は認証チャンネルが見えなくなるため、チャンネルは制限しません。
         // 対象はコマンド実行者本人のみ。処理結果は本人だけに表示します。
         event.deferReply(true).queue(hook -> plugin.unlinkDiscordUser(event.getUser().getId(),
-                message -> hook.editOriginal(message).queue()));
+                message -> hook.editOriginalEmbeds(embed(message)).queue()));
     }
 
     @Override
@@ -300,9 +315,8 @@ final class DiscordVerificationBot extends ListenerAdapter {
                 return;
             }
             String message = template.replace("{mention}", "<@" + discordUserId + ">");
-            channel.sendMessage(message)
-                    .setAllowedMentions(List.of())
-                    .mentionUsers(discordUserId)
+            // Embed 内のメンションは通知が飛ばないため、本文には何も入れず Embed だけを送ります。
+            channel.sendMessageEmbeds(embed(message))
                     .queue(ok -> {}, error -> plugin.getLogger().log(Level.WARNING, "歓迎メッセージを送信できませんでした。", error));
         } catch (RuntimeException exception) {
             plugin.getLogger().log(Level.WARNING, "歓迎メッセージを送信できませんでした。", exception);
