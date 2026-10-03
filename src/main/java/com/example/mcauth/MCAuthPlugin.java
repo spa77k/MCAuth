@@ -31,6 +31,8 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     private static final String DISCORD_VERIFIED_ROLE_ID_ENV = "MCAUTH_DISCORD_VERIFIED_ROLE_ID";
     private static final String ALREADY_LINKED_DISCORD_MESSAGE =
             "このDiscordアカウントは、すでに別のMinecraftアカウントと連携済みです。切り替えるには、先に /unlink で解除してください。";
+    private static final String LOCKDOWN_MESSAGE =
+            "認証システムを起動できなかったため、現在は入場できません。管理者にお問い合わせください。";
 
     // key: 認証コード, value: そのコードで認証される予定のMinecraftプレイヤー情報。
     // Discord にコードが投稿されたとき、このMapから探します。
@@ -39,6 +41,9 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     // key: Minecraft UUID, value: 現在発行中の認証コード。
     // 同じプレイヤーが何度も接続しても、コードが無限に増えないようにします。
     private final Map<UUID, String> pendingCodesByUuid = new HashMap<>();
+
+    // 起動に失敗したときに true にし、サーバー再起動まで全員の入場を拒否します。
+    private volatile boolean lockdown;
 
     // 認証済みプレイヤーを mcauth.db（SQLite）に保存・参照する担当です。
     private VerificationStore store;
@@ -69,15 +74,23 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         // config.yml がまだ存在しない場合、src/main/resources/config.yml をコピーして作ります。
         saveDefaultConfig();
 
-        // 認証データのDB（mcauth.db）を開きます。開けないと入場判定ができないため、プラグインを止めます。
-        store = new VerificationStore(this);
+        // このクラスのイベント処理メソッドを Paper に登録します。
+        // 起動に失敗しても入場チェックが外れないよう、最初に登録します。
+        Bukkit.getPluginManager().registerEvents(this, this);
+
         try {
-            store.load();
-        } catch (IllegalStateException exception) {
-            getLogger().log(Level.SEVERE, "Failed to open the authentication database", exception);
-            Bukkit.getPluginManager().disablePlugin(this);
-            return;
+            setUp();
+        } catch (RuntimeException exception) {
+            // プラグインを止めると誰でも入れてしまうため、止めずに全員の入場を拒否し続けます。
+            getLogger().log(Level.SEVERE, "MCAuth failed to start. All players will be denied until the server restarts.", exception);
+            enterLockdown();
         }
+    }
+
+    private void setUp() {
+        // 認証データのDB（mcauth.db）を開きます。開けないと入場判定ができないため、例外にして全員拒否にします。
+        store = new VerificationStore(this);
+        store.load();
 
         // 設定値を読み込みます。危険な値にならないよう、最低値や範囲を補正しています。
         codeLifetime = Duration.ofSeconds(Math.max(1, getConfig().getLong("auth.code-expire-seconds", 300)));
@@ -87,11 +100,21 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         kickMessage = getConfig().getString("messages.kick", "Discord認証が必要です。\n1. Discordの認証チャンネルで「認証コードを入力」ボタンを押す\n2. 次のコードを入力する: {code}\n3. 認証完了のメッセージが出たら、もう一度接続する");
         verifiedMessage = getConfig().getString("messages.verified", "{player} を認証しました。");
 
-        // このクラスのイベント処理メソッドを Paper に登録します。
-        Bukkit.getPluginManager().registerEvents(this, this);
-
         // Discord Bot を起動します。Token 未設定なら警告を出して起動しません。
         startDiscordBot();
+    }
+
+    void enterLockdown() {
+        lockdown = true;
+        // 起動途中で Bot が動き出していたら止めます。認証を受け付けても保存できないためです。
+        if (discordBot != null) {
+            discordBot.stop();
+            discordBot = null;
+        }
+        // /reload などで接続中の人がいる場合も、全員切断します。
+        for (org.bukkit.entity.Player player : Bukkit.getOnlinePlayers()) {
+            player.kick(Component.text(LOCKDOWN_MESSAGE));
+        }
     }
 
     @Override
@@ -115,6 +138,12 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     public void onAsyncPlayerPreLogin(AsyncPlayerPreLoginEvent event) {
         // プレイヤーのUUIDを取得します。名前変更されてもUUIDは基本的に変わりません。
         UUID uuid = event.getUniqueId();
+
+        // 起動に失敗しているときは、認証済みかどうかに関係なく全員拒否します。
+        if (lockdown) {
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, Component.text(LOCKDOWN_MESSAGE));
+            return;
+        }
 
         // 既に認証済みなら、ログインを妨げません。
         // DBを読めないときは、未認証の人を通さないよう接続を拒否します。

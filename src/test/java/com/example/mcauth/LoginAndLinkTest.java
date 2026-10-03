@@ -58,6 +58,49 @@ class LoginAndLinkTest {
                 any(net.kyori.adventure.text.Component.class));
     }
 
+    @Test void deniesEveryoneAndKicksOnlinePlayersWhenDatabaseCannotOpen() throws Exception {
+        // データフォルダの場所に普通のファイルを置いて、DBを開けない状態を作ります。
+        java.io.File notFolder = directory.resolve("not-a-folder").toFile();
+        assertTrue(notFolder.createNewFile());
+        MCAuthPlugin plugin = mock(MCAuthPlugin.class, CALLS_REAL_METHODS);
+        doReturn(Logger.getAnonymousLogger()).when(plugin).getLogger();
+        doReturn(notFolder).when(plugin).getDataFolder();
+        doNothing().when(plugin).saveDefaultConfig();
+        org.bukkit.entity.Player online = mock(org.bukkit.entity.Player.class);
+        var pluginManager = mock(org.bukkit.plugin.PluginManager.class);
+        try (var bukkit = mockStatic(org.bukkit.Bukkit.class)) {
+            bukkit.when(org.bukkit.Bukkit::getPluginManager).thenReturn(pluginManager);
+            bukkit.when(org.bukkit.Bukkit::getOnlinePlayers).thenAnswer(call -> List.of(online));
+            plugin.onEnable();
+            // プラグインを止めず、入場チェックは登録したままにします。
+            verify(pluginManager).registerEvents(plugin, plugin);
+            verify(pluginManager, never()).disablePlugin(any());
+            verify(online).kick(any(net.kyori.adventure.text.Component.class));
+        }
+        AsyncPlayerPreLoginEvent event = mock(AsyncPlayerPreLoginEvent.class);
+        when(event.getUniqueId()).thenReturn(UUID.randomUUID());
+        when(event.getName()).thenReturn("Player");
+        plugin.onAsyncPlayerPreLogin(event);
+        verify(event).disallow(eq(AsyncPlayerPreLoginEvent.Result.KICK_OTHER),
+                any(net.kyori.adventure.text.Component.class));
+    }
+
+    @Test void lockdownDeniesEvenAuthenticatedPlayers() throws Exception {
+        VerificationStore store = store();
+        UUID owner = UUID.randomUUID();
+        store.authenticateIfAvailable(owner, "Owner", "123", "owner");
+        MCAuthPlugin plugin = plugin(store, new HashMap<>());
+        try (var bukkit = mockStatic(org.bukkit.Bukkit.class)) {
+            bukkit.when(org.bukkit.Bukkit::getOnlinePlayers).thenAnswer(call -> List.of());
+            plugin.enterLockdown();
+        }
+        AsyncPlayerPreLoginEvent event = mock(AsyncPlayerPreLoginEvent.class);
+        when(event.getUniqueId()).thenReturn(owner);
+        plugin.onAsyncPlayerPreLogin(event);
+        verify(event).disallow(eq(AsyncPlayerPreLoginEvent.Result.KICK_OTHER),
+                any(net.kyori.adventure.text.Component.class));
+    }
+
     @Test void linkedDiscordUserGetsExplanationAndCodeStaysUnused() throws Exception {
         VerificationStore store = store();
         store.authenticateIfAvailable(UUID.randomUUID(), "Owner", "123", "owner");
