@@ -29,6 +29,8 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     private static final String DISCORD_TOKEN_ENV = "MCAUTH_DISCORD_TOKEN";
     private static final String DISCORD_CHANNEL_ID_ENV = "MCAUTH_DISCORD_CHANNEL_ID";
     private static final String DISCORD_VERIFIED_ROLE_ID_ENV = "MCAUTH_DISCORD_VERIFIED_ROLE_ID";
+    private static final String ALREADY_LINKED_DISCORD_MESSAGE =
+            "このDiscordアカウントは、すでに別のMinecraftアカウントと連携済みです。切り替えるには、先に /unlink で解除してください。";
 
     // key: 認証コード, value: そのコードで認証される予定のMinecraftプレイヤー情報。
     // Discord にコードが投稿されたとき、このMapから探します。
@@ -128,7 +130,16 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         }
 
         // 古いコードを消してから、このプレイヤー用のコードを作ります。
-        String code = createCode(event.getName(), uuid);
+        // 例外のまま抜けると Paper は接続を許可してしまうため、作れなかったときは拒否します。
+        String code;
+        try {
+            code = createCode(event.getName(), uuid);
+        } catch (RuntimeException exception) {
+            getLogger().log(Level.SEVERE, "Failed to create verification code", exception);
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
+                    Component.text("認証コードを発行できませんでした。しばらく待ってから再接続してください。"));
+            return;
+        }
 
         // config.yml のメッセージ内にある {code} と {player} を実際の値に置き換えます。
         String message = kickMessage
@@ -141,9 +152,11 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
 
     boolean verifyCode(String code, String discordUserId, String discordUserName, Consumer<String> reply) {
         // 同じDiscordアカウントで複数のMinecraftアカウントを認証しにくくします。
+        // 連携済みの人には、コードの誤りではないことを伝えます。コードは消費せず、失敗回数にも数えません。
         try {
             if (store.isDiscordUserAuthenticated(discordUserId)) {
-                return false;
+                reply.accept(ALREADY_LINKED_DISCORD_MESSAGE);
+                return true;
             }
         } catch (IllegalStateException exception) {
             // DBを読めない場合は、コードの誤りとは区別して本人に伝えます。失敗回数には数えません。
@@ -174,10 +187,18 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
             Consumer<String> reply
     ) {
         try {
-            if (!store.authenticateIfAvailable(
+            switch (store.authenticateIfAvailable(
                     verification.uuid(), verification.playerName(), discordUserId, discordUserName)) {
-                reply.accept("このDiscordアカウントは、すでに別のMinecraftアカウントで認証済みです。");
-                return;
+                case DISCORD_ALREADY_LINKED -> {
+                    reply.accept(ALREADY_LINKED_DISCORD_MESSAGE);
+                    return;
+                }
+                case PLAYER_ALREADY_LINKED -> {
+                    reply.accept("このMinecraftアカウントは、すでに別のDiscordアカウントと連携済みです。");
+                    return;
+                }
+                case SAVED -> {
+                }
             }
         } catch (IllegalStateException exception) {
             getLogger().log(Level.SEVERE, "Failed to save authentication", exception);

@@ -247,7 +247,12 @@ final class DiscordVerificationBot extends ListenerAdapter {
 
     @Override
     public void onGuildMemberRemove(@NotNull GuildMemberRemoveEvent event) {
-        // Discordサーバーを退出したユーザーの認証を取り消します。
+        // 認証チャンネルのあるDiscordサーバーを退出したユーザーだけ、認証を取り消します。
+        // Botが入っている別のサーバーからの退出では取り消しません。
+        GuildChannel channel = event.getJDA().getGuildChannelById(channelId);
+        if (channel == null || channel.getGuild().getIdLong() != event.getGuild().getIdLong()) {
+            return;
+        }
         plugin.revokeByDiscordUserId(event.getUser().getId());
     }
 

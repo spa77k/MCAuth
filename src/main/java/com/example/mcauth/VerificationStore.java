@@ -48,24 +48,37 @@ final class VerificationStore implements AutoCloseable {
         return exists("SELECT 1 FROM authenticated_players WHERE discord_user_id = ?", discordUserId);
     }
 
-    synchronized boolean authenticateIfAvailable(UUID uuid, String playerName, String discordUserId, String discordUserName) {
+    synchronized AuthenticationResult authenticateIfAvailable(UUID uuid, String playerName, String discordUserId, String discordUserName) {
         // 確認と保存を同じロック内で行い、同じDiscord IDの二重認証を防ぎます。
         if (isDiscordUserAuthenticated(discordUserId)) {
-            return false;
+            return AuthenticationResult.DISCORD_ALREADY_LINKED;
+        }
+
+        // 既に別のDiscordと連携済みのMinecraftアカウントは上書きしません。
+        // 上書きすると、元のDiscordユーザーが /unlink できないままロールだけ残るためです。
+        if (isAuthenticated(uuid)) {
+            return AuthenticationResult.PLAYER_ALREADY_LINKED;
         }
 
         // Minecraft UUID と Discord ID を一緒に保存して、誰が認証したか後から確認できるようにします。
         try (PreparedStatement statement = connection().prepareStatement(
-                "INSERT OR REPLACE INTO authenticated_players (uuid, name, discord_user_id, discord_user_name) VALUES (?, ?, ?, ?)")) {
+                "INSERT INTO authenticated_players (uuid, name, discord_user_id, discord_user_name) VALUES (?, ?, ?, ?)")) {
             statement.setString(1, uuid.toString());
             statement.setString(2, playerName);
             statement.setString(3, discordUserId);
             statement.setString(4, discordUserName);
             statement.executeUpdate();
-            return true;
+            return AuthenticationResult.SAVED;
         } catch (SQLException exception) {
             throw new IllegalStateException("Failed to save authentication", exception);
         }
+    }
+
+    // 認証の保存結果です。
+    enum AuthenticationResult {
+        SAVED,
+        DISCORD_ALREADY_LINKED,
+        PLAYER_ALREADY_LINKED
     }
 
     synchronized AuthenticatedPlayer deauthenticateByDiscordUserId(String discordUserId) {

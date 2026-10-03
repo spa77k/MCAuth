@@ -14,6 +14,7 @@ import java.time.Duration;
 import java.util.UUID;
 import java.util.logging.Logger;
 
+import static com.example.mcauth.VerificationStore.AuthenticationResult.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -40,17 +41,27 @@ class UnlinkTest {
         assertFalse(reloaded.isAuthenticated(owner));
         assertTrue(reloaded.isAuthenticated(other));
         assertNull(reloaded.deauthenticateByDiscordUserId("123"));
-        assertTrue(reloaded.authenticateIfAvailable(owner, "Owner", "123", "owner"));
+        assertEquals(SAVED, reloaded.authenticateIfAvailable(owner, "Owner", "123", "owner"));
     }
 
     @Test void rejectsSecondMinecraftAccountForSameDiscordUser() {
         VerificationStore store = store();
         UUID first = UUID.randomUUID();
         UUID second = UUID.randomUUID();
-        assertTrue(store.authenticateIfAvailable(first, "First", "123", "owner"));
-        assertFalse(store.authenticateIfAvailable(second, "Second", "123", "owner"));
+        assertEquals(SAVED, store.authenticateIfAvailable(first, "First", "123", "owner"));
+        assertEquals(DISCORD_ALREADY_LINKED, store.authenticateIfAvailable(second, "Second", "123", "owner"));
         assertTrue(store.isAuthenticated(first));
         assertFalse(store.isAuthenticated(second));
+    }
+
+    @Test void keepsExistingLinkWhenAnotherDiscordUserVerifiesSamePlayer() {
+        VerificationStore store = store();
+        UUID player = UUID.randomUUID();
+        assertEquals(SAVED, store.authenticateIfAvailable(player, "Player", "123", "first"));
+        assertEquals(PLAYER_ALREADY_LINKED, store.authenticateIfAvailable(player, "Player", "456", "second"));
+        // 元のDiscordユーザーの連携が残り、本人が /unlink できることを確認します。
+        assertFalse(store.isDiscordUserAuthenticated("456"));
+        assertEquals(player, store.deauthenticateByDiscordUserId("123").uuid());
     }
 
     @Test void failedDeleteKeepsAuthenticationAndThrows() throws Exception {
