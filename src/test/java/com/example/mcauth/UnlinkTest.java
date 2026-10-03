@@ -55,8 +55,9 @@ class UnlinkTest {
 
     @Test void registersSlashCommandInConfiguredGuild() {
         MCAuthPlugin plugin = mock(MCAuthPlugin.class);
+        when(plugin.getLogger()).thenReturn(Logger.getAnonymousLogger());
         DiscordVerificationBot bot = new DiscordVerificationBot(plugin, 42L, 6, 5,
-                Duration.ofSeconds(60), "invalid", "locked");
+                Duration.ofSeconds(60), "invalid", "locked", "panel", 0L);
         var event = mock(net.dv8tion.jda.api.events.session.ReadyEvent.class, RETURNS_DEEP_STUBS);
         bot.onReady(event);
         verify(event.getJDA().getGuildChannelById(42L).getGuild())
@@ -66,7 +67,7 @@ class UnlinkTest {
     @Test void slashCommandUsesSenderAndRejectsOtherChannels() {
         MCAuthPlugin plugin = mock(MCAuthPlugin.class);
         DiscordVerificationBot bot = new DiscordVerificationBot(plugin, 42L, 6, 5,
-                Duration.ofSeconds(60), "invalid", "locked");
+                Duration.ofSeconds(60), "invalid", "locked", "panel", 0L);
         var event = mock(net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent.class,
                 RETURNS_DEEP_STUBS);
         when(event.getName()).thenReturn("unlink");

@@ -1,6 +1,5 @@
 package com.example.mcauth;
 
-import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
@@ -30,6 +29,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     private static final int MAX_CODE_LENGTH = 8;
     private static final String DISCORD_TOKEN_ENV = "MCAUTH_DISCORD_TOKEN";
     private static final String DISCORD_CHANNEL_ID_ENV = "MCAUTH_DISCORD_CHANNEL_ID";
+    private static final String DISCORD_VERIFIED_ROLE_ID_ENV = "MCAUTH_DISCORD_VERIFIED_ROLE_ID";
 
     // key: 認証コード, value: そのコードで認証される予定のMinecraftプレイヤー情報。
     // Discord にコードが投稿されたとき、このMapから探します。
@@ -77,7 +77,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         codeLength = clamp(getConfig().getInt("auth.code-length", 4), MIN_CODE_LENGTH, MAX_CODE_LENGTH);
         codeGroupSize = Math.max(0, getConfig().getInt("auth.code-group-size", 3));
         codeUpperBound = powerOfTen(codeLength);
-        kickMessage = getConfig().getString("messages.kick", "Discord認証が必要です。\n1. Discordの認証チャンネルを開く\n2. 次のコードをそのまま送信する: {code}\n3. 認証完了のメッセージが出たら、もう一度接続する");
+        kickMessage = getConfig().getString("messages.kick", "Discord認証が必要です。\n1. Discordの認証チャンネルで「認証コードを入力」ボタンを押す\n2. 次のコードを入力する: {code}\n3. 認証完了のメッセージが出たら、もう一度接続する");
         verifiedMessage = getConfig().getString("messages.verified", "{player} を認証し、ホワイトリストに追加しました。");
 
         // このクラスのイベント処理メソッドを Paper に登録します。
@@ -124,7 +124,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_WHITELIST, Component.text(message));
     }
 
-    boolean verifyCode(String code, MessageChannel channel, String discordUserId, String discordUserName) {
+    boolean verifyCode(String code, String discordUserId, String discordUserName, Consumer<String> reply) {
         // 同じDiscordアカウントで複数のMinecraftアカウントを認証しにくくします。
         if (store.isDiscordUserAuthenticated(discordUserId)) {
             return false;
@@ -141,30 +141,33 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
 
         // ホワイトリスト変更やファイル保存は Bukkit のメインスレッドで実行します。
         Bukkit.getScheduler().runTask(this,
-                () -> completeVerification(verification, channel, discordUserId, discordUserName));
+                () -> completeVerification(verification, discordUserId, discordUserName, reply));
         return true;
     }
 
     private void completeVerification(
             PendingVerification verification,
-            MessageChannel channel,
             String discordUserId,
-            String discordUserName
+            String discordUserName,
+            Consumer<String> reply
     ) {
         if (!store.authenticateIfAvailable(
                 verification.uuid(), verification.playerName(), discordUserId, discordUserName)) {
-            channel.sendMessage("このDiscordアカウントは、すでに別のMinecraftアカウントで認証済みです。").queue();
+            reply.accept("このDiscordアカウントは、すでに別のMinecraftアカウントで認証済みです。");
             return;
         }
         addToWhitelist(verification.uuid());
+
+        // 設定されていれば、Discordサーバーに参加するためのロールを付けます。
+        if (discordBot != null) {
+            discordBot.grantVerifiedRole(discordUserId);
+        }
 
         String message = verifiedMessage
                 .replace("{player}", verification.playerName())
                 .replace("{uuid}", verification.uuid().toString())
                 .replace("{discord}", discordUserName);
-        if (!message.isBlank()) {
-            channel.sendMessage(message).queue();
-        }
+        reply.accept(message.isBlank() ? "認証が完了しました。" : message);
     }
 
     private void startDiscordBot() {
@@ -195,7 +198,9 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
                 Math.max(1, getConfig().getInt("auth.max-invalid-attempts", 5)),
                 Duration.ofSeconds(Math.max(1, getConfig().getLong("auth.lockout-seconds", 60))),
                 getConfig().getString("messages.invalid-code", "認証コードが無効、または期限切れです。"),
-                getConfig().getString("messages.rate-limited", "認証コードの間違いが多すぎます。しばらく待ってから再試行してください。")
+                getConfig().getString("messages.rate-limited", "認証コードの間違いが多すぎます。しばらく待ってから再試行してください。"),
+                getConfig().getString("messages.panel", "Minecraftサーバーに接続すると表示される認証コードを、下のボタンから入力してください。"),
+                parseOptionalId(environmentOrConfig(DISCORD_VERIFIED_ROLE_ID_ENV, "discord.verified-role-id", ""))
         );
 
         // Discord へ接続します。
@@ -208,6 +213,20 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
             return environmentValue;
         }
         return getConfig().getString(configPath, defaultValue);
+    }
+
+    private long parseOptionalId(String text) {
+        // 空なら「設定なし」として0を返します。
+        String trimmed = text.trim();
+        if (trimmed.isEmpty()) {
+            return 0;
+        }
+        try {
+            return Long.parseUnsignedLong(trimmed);
+        } catch (NumberFormatException exception) {
+            getLogger().warning("Discord verified role id is invalid. Set MCAUTH_DISCORD_VERIFIED_ROLE_ID or discord.verified-role-id in config.yml.");
+            return 0;
+        }
     }
 
     private void syncAuthenticatedWhitelist() {
