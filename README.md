@@ -19,6 +19,7 @@ MCAuth は、Minecraft サーバーへの初回接続時に Discord 認証を要
 - 初回接続時に認証コードを表示してキック
 - Discord の指定チャンネルにボタン付きの案内を設置し、フォームでコード認証
 - 認証成功後に指定ロールを付与（任意）
+- 認証成功後に指定チャンネルへ歓迎メッセージを投稿（投稿先・文面は設定で変更可能）
 - 認証済み Minecraft UUID と Discord ユーザー情報を SQLite データベースに保存（標準のホワイトリストとは別管理）
 - コード総当たり対策のための失敗回数制限
 - Discordサーバー退出時に連携を解除し、接続中なら即座に切断
@@ -63,7 +64,11 @@ white-list=false
 discord:
   token: "PUT_DISCORD_BOT_TOKEN_HERE"
   channel-id: "1481576484274573414"
+  welcome-channel-id: "1449580988597403651"
   verified-role-id: ""
+
+messages:
+  welcome: "{mention} さん、ようこそ！"
 
 auth:
   code-length: 4
@@ -78,6 +83,8 @@ auth:
 - `discord.token`: Discord Bot の Token
 - `discord.channel-id`: 認証ボタンを置く Discord チャンネル ID。Bot 起動時にボタン付きの案内を投稿し、以前の案内があれば書き換えます
 - `discord.verified-role-id`: 認証成功時に付けるロール ID。`/unlink` で連携を解除すると外します。空なら付けません
+- `discord.welcome-channel-id`: 認証成功後の歓迎メッセージの投稿先。既定は `1449580988597403651`。認証チャンネルと同じサーバー内のチャンネルを指定し、Botに閲覧・送信権限を付けてください。空なら投稿しません
+- `messages.welcome`: 歓迎メッセージの文面。既定は `{mention} さん、ようこそ！`。`{mention}` は本人へのメンションに置き換わります。空なら投稿しません。DB保存成功時だけ投稿し、失敗・連携済み・Bot再起動時には投稿しません。解除後に再認証した場合は再び投稿します。投稿に失敗しても認証は維持し、ログに記録します
 - `messages.panel`: 認証チャンネルに置く案内の本文
 - `auth.code-length`: 認証コードの桁数（4〜8、既定は4）
 - `auth.code-group-size`: キック画面でコードを区切る桁数。6桁を3にすると「123 456」と表示します。均等に分けられない桁数や0では区切りません。Discordには区切ったまま貼り付けても、空白・ハイフン・全角数字を無視して受け付けます

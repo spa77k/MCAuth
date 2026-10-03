@@ -259,6 +259,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         // 設定されていれば、Discordサーバーに参加するためのロールを付けます。
         if (discordBot != null) {
             discordBot.grantVerifiedRole(discordUserId);
+            discordBot.sendWelcome(discordUserId);
         }
 
         String message = verifiedMessage

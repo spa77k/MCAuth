@@ -28,6 +28,7 @@ import org.jetbrains.annotations.NotNull;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -277,6 +278,35 @@ final class DiscordVerificationBot extends ListenerAdapter {
             return;
         }
         plugin.revokeByDiscordUserId(event.getUser().getId());
+    }
+
+    void sendWelcome(String discordUserId) {
+        JDA currentJda = jda;
+        if (currentJda == null) {
+            return;
+        }
+        // 歓迎の投稿に失敗しても、保存済みの認証と本人への成功応答は維持します。
+        try {
+            String id = plugin.getConfig().getString("discord.welcome-channel-id", "1449580988597403651").trim();
+            String template = plugin.getConfig().getString("messages.welcome", "{mention} さん、ようこそ！");
+            if (id.isBlank() || template.isBlank()) {
+                return;
+            }
+            GuildChannel authChannel = currentJda.getGuildChannelById(channelId);
+            GuildChannel destination = currentJda.getGuildChannelById(Long.parseUnsignedLong(id));
+            if (!(destination instanceof GuildMessageChannel channel) || authChannel == null
+                    || destination.getGuild().getIdLong() != authChannel.getGuild().getIdLong()) {
+                plugin.getLogger().warning("歓迎チャンネルが見つからないか、認証サーバー内の投稿可能なチャンネルではありません: " + id);
+                return;
+            }
+            String message = template.replace("{mention}", "<@" + discordUserId + ">");
+            channel.sendMessage(message)
+                    .setAllowedMentions(List.of())
+                    .mentionUsers(discordUserId)
+                    .queue(ok -> {}, error -> plugin.getLogger().log(Level.WARNING, "歓迎メッセージを送信できませんでした。", error));
+        } catch (RuntimeException exception) {
+            plugin.getLogger().log(Level.WARNING, "歓迎メッセージを送信できませんでした。", exception);
+        }
     }
 
     void grantVerifiedRole(String discordUserId) {
