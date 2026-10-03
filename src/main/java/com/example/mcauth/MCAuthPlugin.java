@@ -16,6 +16,10 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.logging.Level;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.concurrent.CompletableFuture;
+import java.util.ArrayList;
+import java.util.List;
 
 // Paper が最初に読み込むプラグイン本体です。
 // Minecraft 側の接続チェック、認証コード発行、認証済みプレイヤーのDB登録を担当します。
@@ -44,6 +48,8 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
 
     // 起動に失敗したときに true にし、サーバー再起動まで全員の入場を拒否します。
     private volatile boolean lockdown;
+    private volatile boolean membershipCheckPending;
+    private volatile boolean shuttingDown;
 
     // 認証済みプレイヤーを mcauth.db（SQLite）に保存・参照する担当です。
     private VerificationStore store;
@@ -119,6 +125,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
 
     @Override
     public void onDisable() {
+        shuttingDown = true;
         // サーバー停止・プラグイン無効化時に Discord Bot を停止します。
         if (discordBot != null) {
             discordBot.stop();
@@ -142,6 +149,12 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         // 起動に失敗しているときは、認証済みかどうかに関係なく全員拒否します。
         if (lockdown) {
             event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, Component.text(LOCKDOWN_MESSAGE));
+            return;
+        }
+
+        if (membershipCheckPending) {
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
+                    Component.text("Discordの在籍状況を確認中です。しばらく待ってから再接続してください。"));
             return;
         }
 
@@ -180,6 +193,10 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     }
 
     boolean verifyCode(String code, String discordUserId, String discordUserName, Consumer<String> reply) {
+        if (lockdown || membershipCheckPending) {
+            reply.accept("Discordの在籍確認が完了していないため、現在は認証できません。");
+            return true;
+        }
         // 同じDiscordアカウントで複数のMinecraftアカウントを認証しにくくします。
         // 連携済みの人には、コードの誤りではないことを伝えます。コードは消費せず、失敗回数にも数えません。
         try {
@@ -215,6 +232,10 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
             String discordUserName,
             Consumer<String> reply
     ) {
+        if (lockdown || membershipCheckPending || shuttingDown) {
+            reply.accept("現在は認証できません。しばらく待ってから再試行してください。");
+            return;
+        }
         try {
             switch (store.authenticateIfAvailable(
                     verification.uuid(), verification.playerName(), discordUserId, discordUserName)) {
@@ -281,7 +302,59 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         );
 
         // Discord へ接続します。
+        membershipCheckPending = true;
         discordBot.start(token);
+    }
+
+    void reconcileDiscordMembership(Function<String, CompletableFuture<Boolean>> membershipLookup) {
+        if (shuttingDown) {
+            return;
+        }
+        membershipCheckPending = true;
+        List<String> departed = new ArrayList<>();
+        CompletableFuture<Void> checks = CompletableFuture.completedFuture(null);
+        try {
+            // REST確認を順番に実行し、キャッシュ欠落や通信失敗を退出と取り違えません。
+            for (String id : store.authenticatedDiscordUserIds()) {
+                checks = checks.thenCompose(ignored -> membershipLookup.apply(id).thenAccept(present -> {
+                    if (!present) {
+                        departed.add(id);
+                    }
+                }));
+            }
+        } catch (RuntimeException exception) {
+            checks = CompletableFuture.failedFuture(exception);
+        }
+        checks.whenComplete((ignored, error) -> {
+            if (shuttingDown) {
+                return;
+            }
+            Bukkit.getScheduler().runTask(this, () -> {
+                if (shuttingDown || lockdown) {
+                    return;
+                }
+                try {
+                    if (error != null) {
+                        throw new IllegalStateException("Failed to check Discord membership", error);
+                    }
+                    for (String id : departed) {
+                        revokeOnMainThread(id, true);
+                    }
+                    membershipCheckPending = false;
+                } catch (RuntimeException exception) {
+                    getLogger().log(Level.SEVERE, "Discord membership reconciliation failed", exception);
+                    enterLockdown();
+                }
+            });
+        });
+    }
+
+    void discordMembershipCheckFailed() {
+        Bukkit.getScheduler().runTask(this, () -> {
+            if (!shuttingDown) {
+                enterLockdown();
+            }
+        });
     }
 
     private String environmentOrConfig(String environmentName, String configPath, String defaultValue) {
@@ -326,7 +399,14 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
 
     void revokeByDiscordUserId(String discordUserId) {
         // 認証の確定と解除をメインスレッドで順番に処理します。
-        Bukkit.getScheduler().runTask(this, () -> revokeOnMainThread(discordUserId, false));
+        Bukkit.getScheduler().runTask(this, () -> {
+            try {
+                revokeOnMainThread(discordUserId, true);
+            } catch (RuntimeException exception) {
+                getLogger().log(Level.SEVERE, "Failed to revoke departed Discord user", exception);
+                enterLockdown();
+            }
+        });
     }
 
     private AuthenticatedPlayer revokeOnMainThread(String discordUserId, boolean disconnect) {

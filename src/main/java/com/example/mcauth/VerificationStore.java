@@ -10,6 +10,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.List;
 
 // 認証済みプレイヤーを plugins/MCAuth/mcauth.db（SQLite）に保存・参照するクラスです。
 // Minecraft標準のホワイトリスト（whitelist.json）とは独立して、入場可否の元データになります。
@@ -36,6 +38,20 @@ final class VerificationStore implements AutoCloseable {
     synchronized boolean isAuthenticated(UUID uuid) {
         // Minecraft UUID が登録されていれば認証済みです。
         return exists("SELECT 1 FROM authenticated_players WHERE uuid = ?", uuid.toString());
+    }
+
+    synchronized List<String> authenticatedDiscordUserIds() {
+        try (PreparedStatement statement = connection().prepareStatement(
+                "SELECT discord_user_id FROM authenticated_players");
+             ResultSet result = statement.executeQuery()) {
+            List<String> ids = new ArrayList<>();
+            while (result.next()) {
+                ids.add(result.getString("discord_user_id"));
+            }
+            return List.copyOf(ids);
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Failed to read linked Discord users", exception);
+        }
     }
 
     synchronized boolean isDiscordUserAuthenticated(String discordUserId) {

@@ -5,6 +5,8 @@ import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.Role;
+import net.dv8tion.jda.api.exceptions.ErrorResponseException;
+import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.entities.UserSnowflake;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildMessageChannel;
@@ -27,6 +29,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.logging.Level;
 import java.util.regex.Pattern;
 
@@ -112,6 +116,7 @@ final class DiscordVerificationBot extends ListenerAdapter {
         } catch (RuntimeException exception) {
             // Token が間違っている、ネットワークに繋がらない等の場合はここに来ます。
             plugin.getLogger().log(Level.SEVERE, "Failed to start Discord bot", exception);
+            throw exception;
         }
     }
 
@@ -130,8 +135,10 @@ final class DiscordVerificationBot extends ListenerAdapter {
         GuildChannel channel = event.getJDA().getGuildChannelById(channelId);
         if (channel == null) {
             plugin.getLogger().warning("認証チャンネルが見つからないため /unlink と認証ボタンを設置できません。");
+            plugin.discordMembershipCheckFailed();
             return;
         }
+        plugin.reconcileDiscordMembership(id -> retrieveMembership(channel.getGuild(), id));
         channel.getGuild().upsertCommand("unlink", "自分のMinecraft連携を解除し、接続中なら切断します")
                 .queue(command -> {}, error -> plugin.getLogger().log(Level.SEVERE, "Failed to register /unlink", error));
         if (channel instanceof GuildMessageChannel messageChannel) {
@@ -139,6 +146,25 @@ final class DiscordVerificationBot extends ListenerAdapter {
         } else {
             plugin.getLogger().warning("認証チャンネルにメッセージを送れないため、認証ボタンを設置できません。");
         }
+    }
+
+    static CompletableFuture<Boolean> retrieveMembership(Guild guild, String discordUserId) {
+        return guild.retrieveMemberById(discordUserId).useCache(false).submit()
+                .handle((member, error) -> {
+                    if (error == null) {
+                        return true;
+                    }
+                    Throwable cause = error;
+                    while (cause instanceof CompletionException && cause.getCause() != null) {
+                        cause = cause.getCause();
+                    }
+                    if (cause instanceof ErrorResponseException response
+                            && (response.getErrorResponse() == ErrorResponse.UNKNOWN_MEMBER
+                            || response.getErrorResponse() == ErrorResponse.UNKNOWN_USER)) {
+                        return false;
+                    }
+                    throw new CompletionException(cause);
+                });
     }
 
     private void postPanel(GuildMessageChannel channel) {
