@@ -236,10 +236,7 @@ final class DiscordVerificationBot extends ListenerAdapter {
         if (!event.getName().equals("unlink")) {
             return;
         }
-        if (!event.isFromGuild() || event.getChannel().getIdLong() != channelId) {
-            event.reply("認証チャンネルで /unlink を実行してください。").setEphemeral(true).queue();
-            return;
-        }
+        // 認証後は認証チャンネルが見えなくなるため、チャンネルは制限しません。
         // 対象はコマンド実行者本人のみ。処理結果は本人だけに表示します。
         event.deferReply(true).queue(hook -> plugin.unlinkDiscordUser(event.getUser().getId(),
                 message -> hook.editOriginal(message).queue()));

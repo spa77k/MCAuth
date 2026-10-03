@@ -88,7 +88,7 @@ class UnlinkTest {
                 .upsertCommand(eq("unlink"), anyString());
     }
 
-    @Test void slashCommandUsesSenderAndRejectsOtherChannels() {
+    @Test void slashCommandUsesSenderInAnyChannel() {
         MCAuthPlugin plugin = mock(MCAuthPlugin.class);
         DiscordVerificationBot bot = new DiscordVerificationBot(plugin, 42L, 6, 5,
                 Duration.ofSeconds(60), "invalid", "locked", "panel", 0L);
@@ -109,10 +109,7 @@ class UnlinkTest {
         clearInvocations(plugin);
         when(event.getChannel().getIdLong()).thenReturn(99L);
         bot.onSlashCommandInteraction(event);
-        verify(event).reply("認証チャンネルで /unlink を実行してください。");
-        when(event.isFromGuild()).thenReturn(false);
-        bot.onSlashCommandInteraction(event);
-        verifyNoInteractions(plugin);
+        verify(plugin).unlinkDiscordUser(eq("123"), any());
     }
 
     @Test void unlinkKicksLeavesWhitelistUntouchedAndReportsMissingLink() throws Exception {
