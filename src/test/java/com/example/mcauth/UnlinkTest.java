@@ -43,14 +43,27 @@ class UnlinkTest {
         assertTrue(reloaded.authenticateIfAvailable(owner, "Owner", "123", "owner"));
     }
 
-    @Test void failedSaveRestoresAuthentication() throws Exception {
+    @Test void rejectsSecondMinecraftAccountForSameDiscordUser() {
+        VerificationStore store = store();
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        assertTrue(store.authenticateIfAvailable(first, "First", "123", "owner"));
+        assertFalse(store.authenticateIfAvailable(second, "Second", "123", "owner"));
+        assertTrue(store.isAuthenticated(first));
+        assertFalse(store.isAuthenticated(second));
+    }
+
+    @Test void failedDeleteKeepsAuthenticationAndThrows() throws Exception {
         VerificationStore store = store();
         UUID owner = UUID.randomUUID();
         store.authenticateIfAvailable(owner, "Owner", "123", "owner");
-        java.nio.file.Files.delete(directory.resolve("data.yml"));
-        java.nio.file.Files.createDirectory(directory.resolve("data.yml"));
+        // DBの接続を閉じて、削除が失敗する状況を作ります。
+        var field = VerificationStore.class.getDeclaredField("connection");
+        field.setAccessible(true);
+        ((java.sql.Connection) field.get(store)).close();
         assertThrows(IllegalStateException.class, () -> store.deauthenticateByDiscordUserId("123"));
-        assertTrue(store.isAuthenticated(owner));
+        VerificationStore reloaded = store();
+        assertTrue(reloaded.isAuthenticated(owner));
     }
 
     @Test void registersSlashCommandInConfiguredGuild() {
@@ -91,7 +104,7 @@ class UnlinkTest {
         verifyNoInteractions(plugin);
     }
 
-    @Test void unlinkRemovesWhitelistKicksAndReportsMissingLink() throws Exception {
+    @Test void unlinkKicksLeavesWhitelistUntouchedAndReportsMissingLink() throws Exception {
         MCAuthPlugin plugin = mock(MCAuthPlugin.class, CALLS_REAL_METHODS);
         VerificationStore store = store();
         UUID owner = UUID.randomUUID();
@@ -117,12 +130,12 @@ class UnlinkTest {
             bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
             bukkit.when(() -> Bukkit.getOfflinePlayer(owner)).thenReturn(offline);
             bukkit.when(() -> Bukkit.getPlayer(owner)).thenReturn(online);
-            when(offline.isWhitelisted()).thenReturn(true);
             doAnswer(call -> { call.getArgument(1, Runnable.class).run(); return null; })
                     .when(scheduler).runTask(eq(plugin), any(Runnable.class));
             plugin.unlinkDiscordUser("123", message -> channel.sendMessage(message).queue());
             assertFalse(store.isAuthenticated(owner));
-            verify(offline).setWhitelisted(false);
+            // Minecraft標準のホワイトリストは操作しません。
+            verify(offline, never()).setWhitelisted(anyBoolean());
             verify(online).kick(any(net.kyori.adventure.text.Component.class));
             verify(channel).sendMessage(startsWith("Minecraftとの連携を解除しました。"));
             verify(bot).removeVerifiedRole("123");

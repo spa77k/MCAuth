@@ -2,7 +2,6 @@ package com.example.mcauth;
 
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
-import org.bukkit.OfflinePlayer;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
@@ -19,7 +18,7 @@ import java.util.logging.Level;
 import java.util.function.Consumer;
 
 // Paper が最初に読み込むプラグイン本体です。
-// Minecraft 側の接続チェック、認証コード発行、ホワイトリスト追加を担当します。
+// Minecraft 側の接続チェック、認証コード発行、認証済みプレイヤーのDB登録を担当します。
 public final class MCAuthPlugin extends JavaPlugin implements Listener {
     // 認証コードは推測されにくい乱数で作ります。
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -39,7 +38,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     // 同じプレイヤーが何度も接続しても、コードが無限に増えないようにします。
     private final Map<UUID, String> pendingCodesByUuid = new HashMap<>();
 
-    // 認証済みプレイヤーを data.yml に保存・読み込みする担当です。
+    // 認証済みプレイヤーを mcauth.db（SQLite）に保存・参照する担当です。
     private VerificationStore store;
 
     // Discord Bot を起動し、認証チャンネルのメッセージを監視する担当です。
@@ -68,9 +67,15 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         // config.yml がまだ存在しない場合、src/main/resources/config.yml をコピーして作ります。
         saveDefaultConfig();
 
-        // 保存済みの認証データを data.yml から読み込みます。
+        // 認証データのDB（mcauth.db）を開きます。開けないと入場判定ができないため、プラグインを止めます。
         store = new VerificationStore(this);
-        store.load();
+        try {
+            store.load();
+        } catch (IllegalStateException exception) {
+            getLogger().log(Level.SEVERE, "Failed to open the authentication database", exception);
+            Bukkit.getPluginManager().disablePlugin(this);
+            return;
+        }
 
         // 設定値を読み込みます。危険な値にならないよう、最低値や範囲を補正しています。
         codeLifetime = Duration.ofSeconds(Math.max(1, getConfig().getLong("auth.code-expire-seconds", 300)));
@@ -78,13 +83,10 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         codeGroupSize = Math.max(0, getConfig().getInt("auth.code-group-size", 3));
         codeUpperBound = powerOfTen(codeLength);
         kickMessage = getConfig().getString("messages.kick", "Discord認証が必要です。\n1. Discordの認証チャンネルで「認証コードを入力」ボタンを押す\n2. 次のコードを入力する: {code}\n3. 認証完了のメッセージが出たら、もう一度接続する");
-        verifiedMessage = getConfig().getString("messages.verified", "{player} を認証し、ホワイトリストに追加しました。");
+        verifiedMessage = getConfig().getString("messages.verified", "{player} を認証しました。");
 
         // このクラスのイベント処理メソッドを Paper に登録します。
         Bukkit.getPluginManager().registerEvents(this, this);
-
-        // data.yml に保存済みの人を、サーバー起動時にもう一度ホワイトリストへ反映します。
-        syncAuthenticatedWhitelist();
 
         // Discord Bot を起動します。Token 未設定なら警告を出して起動しません。
         startDiscordBot();
@@ -100,6 +102,11 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
 
         // 未認証コードは一時データなので、プラグイン停止時に破棄します。
         clearPendingCodes();
+
+        // DB接続を閉じます。
+        if (store != null) {
+            store.close();
+        }
     }
 
     @EventHandler
@@ -108,7 +115,15 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         UUID uuid = event.getUniqueId();
 
         // 既に認証済みなら、ログインを妨げません。
-        if (store.isAuthenticated(uuid)) {
+        // DBを読めないときは、未認証の人を通さないよう接続を拒否します。
+        try {
+            if (store.isAuthenticated(uuid)) {
+                return;
+            }
+        } catch (IllegalStateException exception) {
+            getLogger().log(Level.SEVERE, "Failed to check authentication", exception);
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
+                    Component.text("認証情報を確認できませんでした。管理者にお問い合わせください。"));
             return;
         }
 
@@ -126,8 +141,15 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
 
     boolean verifyCode(String code, String discordUserId, String discordUserName, Consumer<String> reply) {
         // 同じDiscordアカウントで複数のMinecraftアカウントを認証しにくくします。
-        if (store.isDiscordUserAuthenticated(discordUserId)) {
-            return false;
+        try {
+            if (store.isDiscordUserAuthenticated(discordUserId)) {
+                return false;
+            }
+        } catch (IllegalStateException exception) {
+            // DBを読めない場合は、コードの誤りとは区別して本人に伝えます。失敗回数には数えません。
+            getLogger().log(Level.SEVERE, "Failed to check Discord user", exception);
+            reply.accept("認証を確認できませんでした。管理者にお問い合わせください。");
+            return true;
         }
 
         // コードは1回使ったら消します。成功・失敗を問わず再利用されないようにするためです。
@@ -151,12 +173,17 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
             String discordUserName,
             Consumer<String> reply
     ) {
-        if (!store.authenticateIfAvailable(
-                verification.uuid(), verification.playerName(), discordUserId, discordUserName)) {
-            reply.accept("このDiscordアカウントは、すでに別のMinecraftアカウントで認証済みです。");
+        try {
+            if (!store.authenticateIfAvailable(
+                    verification.uuid(), verification.playerName(), discordUserId, discordUserName)) {
+                reply.accept("このDiscordアカウントは、すでに別のMinecraftアカウントで認証済みです。");
+                return;
+            }
+        } catch (IllegalStateException exception) {
+            getLogger().log(Level.SEVERE, "Failed to save authentication", exception);
+            reply.accept("認証を保存できませんでした。管理者にお問い合わせください。");
             return;
         }
-        addToWhitelist(verification.uuid());
 
         // 設定されていれば、Discordサーバーに参加するためのロールを付けます。
         if (discordBot != null) {
@@ -229,13 +256,6 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    private void syncAuthenticatedWhitelist() {
-        // data.yml に保存されている認証済みプレイヤー全員をホワイトリストへ反映します。
-        for (UUID uuid : store.authenticatedUuids()) {
-            addToWhitelist(uuid);
-        }
-    }
-
     void unlinkDiscordUser(String discordUserId, Consumer<String> reply) {
         Bukkit.getScheduler().runTask(this, () -> {
             try {
@@ -266,7 +286,6 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
             return null;
         }
         removeCodeForUuid(revoked.uuid());
-        removeFromWhitelist(revoked.uuid());
         if (disconnect) {
             org.bukkit.entity.Player player = Bukkit.getPlayer(revoked.uuid());
             if (player != null) {
@@ -274,23 +293,6 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
             }
         }
         return revoked;
-    }
-
-    private void addToWhitelist(UUID uuid) {
-        // UUID から OfflinePlayer を取得します。オフラインでもホワイトリスト追加できます。
-        OfflinePlayer player = Bukkit.getOfflinePlayer(uuid);
-
-        // まだホワイトリストに入っていない場合だけ追加します。
-        if (!player.isWhitelisted()) {
-            player.setWhitelisted(true);
-        }
-    }
-
-    private void removeFromWhitelist(UUID uuid) {
-        OfflinePlayer player = Bukkit.getOfflinePlayer(uuid);
-        if (player.isWhitelisted()) {
-            player.setWhitelisted(false);
-        }
     }
 
     private synchronized String createCode(String playerName, UUID uuid) {

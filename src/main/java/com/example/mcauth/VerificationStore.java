@@ -1,94 +1,51 @@
 package com.example.mcauth;
 
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
-import java.io.IOException;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.Set;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.UUID;
-import java.util.logging.Level;
 
-// 認証済みプレイヤーを plugins/MCAuth/data.yml に保存・読み込みするクラスです。
-final class VerificationStore {
-    private static final String AUTHENTICATED_PATH = "authenticated";
-
+// 認証済みプレイヤーを plugins/MCAuth/mcauth.db（SQLite）に保存・参照するクラスです。
+// Minecraft標準のホワイトリスト（whitelist.json）とは独立して、入場可否の元データになります。
+final class VerificationStore implements AutoCloseable {
     // ログ出力やプラグインフォルダ取得に使います。
     private final JavaPlugin plugin;
 
-    // 保存先ファイルです。実際には plugins/MCAuth/data.yml になります。
+    // 保存先ファイルです。実際には plugins/MCAuth/mcauth.db になります。
     private final File file;
 
-    // key: Minecraft UUID, value: 認証済みプレイヤー情報。
-    // サーバー起動中はこのMapを見て認証済みか判定します。
-    private final Map<UUID, AuthenticatedPlayer> authenticatedPlayers = new HashMap<>();
+    // SQLite への接続です。最初に使うときに開き、close() で閉じます。
+    private Connection connection;
 
     VerificationStore(JavaPlugin plugin) {
         this.plugin = plugin;
-        this.file = new File(plugin.getDataFolder(), "data.yml");
+        this.file = new File(plugin.getDataFolder(), "mcauth.db");
     }
 
+    // DBファイルとテーブルを用意します。開けない場合は例外にして、呼び出し側でプラグインを止められるようにします。
     synchronized void load() {
-        // 再読み込み時に古いメモリ上のデータが残らないよう、最初に空にします。
-        authenticatedPlayers.clear();
-
-        // data.yml がまだ無い場合は、保存済み認証者なしとして扱います。
-        if (!file.isFile()) {
-            return;
-        }
-
-        // Bukkit の YamlConfiguration を使って data.yml を読みます。
-        FileConfiguration data = YamlConfiguration.loadConfiguration(file);
-
-        // data.yml の authenticated: 以下が認証済みプレイヤー一覧です。
-        ConfigurationSection section = data.getConfigurationSection(AUTHENTICATED_PATH);
-        if (section == null) {
-            return;
-        }
-
-        // authenticated: の直下には Minecraft UUID が並びます。
-        for (String key : section.getKeys(false)) {
-            try {
-                // YAML上の文字列UUIDを Java の UUID 型へ変換します。
-                UUID uuid = UUID.fromString(key);
-
-                // UUID、Minecraft名、Discord情報をまとめてメモリに載せます。
-                authenticatedPlayers.put(uuid, new AuthenticatedPlayer(
-                        uuid,
-                        section.getString(key + ".name", "Unknown"),
-                        section.getString(key + ".discord-user-id", ""),
-                        section.getString(key + ".discord-user-name", "")
-                ));
-            } catch (IllegalArgumentException exception) {
-                // UUID形式でないキーがあっても、プラグイン全体は止めずにその行だけ無視します。
-                plugin.getLogger().warning("Ignoring invalid UUID in data.yml: " + key);
-            }
-        }
+        connection();
     }
 
     synchronized boolean isAuthenticated(UUID uuid) {
-        // Minecraft UUID がMapにあれば認証済みです。
-        return authenticatedPlayers.containsKey(uuid);
+        // Minecraft UUID が登録されていれば認証済みです。
+        return exists("SELECT 1 FROM authenticated_players WHERE uuid = ?", uuid.toString());
     }
 
     synchronized boolean isDiscordUserAuthenticated(String discordUserId) {
-        // 古いdata.ymlなどでDiscord IDが空の場合は、重複チェック対象にしません。
+        // Discord IDが空の場合は、重複チェック対象にしません。
         if (discordUserId.isBlank()) {
             return false;
         }
 
         // 既に同じDiscordユーザーIDで認証済みのMinecraftアカウントがあるか探します。
-        for (AuthenticatedPlayer player : authenticatedPlayers.values()) {
-            if (player.discordUserId().equals(discordUserId)) {
-                return true;
-            }
-        }
-        return false;
+        return exists("SELECT 1 FROM authenticated_players WHERE discord_user_id = ?", discordUserId);
     }
 
     synchronized boolean authenticateIfAvailable(UUID uuid, String playerName, String discordUserId, String discordUserName) {
@@ -98,59 +55,107 @@ final class VerificationStore {
         }
 
         // Minecraft UUID と Discord ID を一緒に保存して、誰が認証したか後から確認できるようにします。
-        authenticatedPlayers.put(uuid, new AuthenticatedPlayer(uuid, playerName, discordUserId, discordUserName));
-
-        // メモリ上だけでなく data.yml にも書き込みます。
-        save();
-        return true;
+        try (PreparedStatement statement = connection().prepareStatement(
+                "INSERT OR REPLACE INTO authenticated_players (uuid, name, discord_user_id, discord_user_name) VALUES (?, ?, ?, ?)")) {
+            statement.setString(1, uuid.toString());
+            statement.setString(2, playerName);
+            statement.setString(3, discordUserId);
+            statement.setString(4, discordUserName);
+            statement.executeUpdate();
+            return true;
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Failed to save authentication", exception);
+        }
     }
 
     synchronized AuthenticatedPlayer deauthenticateByDiscordUserId(String discordUserId) {
-        // Discord ID が一致する認証済みエントリを探して削除します。
-        Iterator<Map.Entry<UUID, AuthenticatedPlayer>> iterator = authenticatedPlayers.entrySet().iterator();
-        while (iterator.hasNext()) {
-            AuthenticatedPlayer player = iterator.next().getValue();
-            if (player.discordUserId().equals(discordUserId)) {
-                iterator.remove();
-                if (!save()) {
-                    authenticatedPlayers.put(player.uuid(), player);
-                    throw new IllegalStateException("Failed to save unlink operation");
-                }
-                return player;
-            }
-        }
-        return null;
-    }
-
-    synchronized Set<UUID> authenticatedUuids() {
-        // ホワイトリスト同期にはUUIDだけを渡し、内部Mapの構造を公開しません。
-        return Set.copyOf(authenticatedPlayers.keySet());
-    }
-
-    private boolean save() {
-        // 新しいYAMLを作り、現在の認証済みプレイヤーをすべて書き込みます。
-        FileConfiguration data = new YamlConfiguration();
-        for (Map.Entry<UUID, AuthenticatedPlayer> entry : authenticatedPlayers.entrySet()) {
-            AuthenticatedPlayer player = entry.getValue();
-            String path = AUTHENTICATED_PATH + "." + entry.getKey();
-
-            // 保存形式:
-            // authenticated.<UUID>.name
-            // authenticated.<UUID>.discord-user-id
-            // authenticated.<UUID>.discord-user-name
-            data.set(path + ".name", player.playerName());
-            data.set(path + ".discord-user-id", player.discordUserId());
-            data.set(path + ".discord-user-name", player.discordUserName());
-        }
-
         try {
-            // plugins/MCAuth/data.yml に保存します。
-            data.save(file);
-            return true;
-        } catch (IOException exception) {
-            // ファイル権限などで保存できない場合はログに出します。
-            plugin.getLogger().log(Level.SEVERE, "Failed to save data.yml", exception);
-            return false;
+            Connection connection = connection();
+            AuthenticatedPlayer player;
+
+            // 削除前に、通知や切断に使う認証情報を取り出します。
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT uuid, name, discord_user_id, discord_user_name FROM authenticated_players WHERE discord_user_id = ?")) {
+                statement.setString(1, discordUserId);
+                try (ResultSet result = statement.executeQuery()) {
+                    if (!result.next()) {
+                        return null;
+                    }
+                    player = new AuthenticatedPlayer(
+                            UUID.fromString(result.getString("uuid")),
+                            result.getString("name"),
+                            result.getString("discord_user_id"),
+                            result.getString("discord_user_name")
+                    );
+                }
+            }
+
+            // 削除に失敗した場合は例外にして、解除成功として扱わせません。
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "DELETE FROM authenticated_players WHERE discord_user_id = ?")) {
+                statement.setString(1, discordUserId);
+                statement.executeUpdate();
+            }
+            return player;
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Failed to save unlink operation", exception);
+        }
+    }
+
+    @Override
+    public synchronized void close() {
+        if (connection == null) {
+            return;
+        }
+        try {
+            connection.close();
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Failed to close mcauth.db: " + exception.getMessage());
+        }
+        connection = null;
+    }
+
+    private boolean exists(String sql, String value) {
+        try (PreparedStatement statement = connection().prepareStatement(sql)) {
+            statement.setString(1, value);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next();
+            }
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Failed to read mcauth.db", exception);
+        }
+    }
+
+    private Connection connection() {
+        if (connection != null) {
+            return connection;
+        }
+        try {
+            // Paper に同梱されている SQLite ドライバーを使います。
+            File folder = file.getParentFile();
+            if (folder != null) {
+                folder.mkdirs();
+            }
+            Connection opened = DriverManager.getConnection("jdbc:sqlite:" + file.getAbsolutePath());
+            try (Statement statement = opened.createStatement()) {
+                // 保存形式:
+                // uuid: Minecraft UUID（主キー）
+                // name: 認証時のMinecraft名
+                // discord_user_id: 認証したDiscordユーザーID（1人1アカウントにするため重複不可）
+                // discord_user_name: 認証時のDiscord名
+                statement.executeUpdate("CREATE TABLE IF NOT EXISTS authenticated_players ("
+                        + "uuid TEXT PRIMARY KEY, "
+                        + "name TEXT NOT NULL, "
+                        + "discord_user_id TEXT NOT NULL UNIQUE, "
+                        + "discord_user_name TEXT NOT NULL)");
+            } catch (SQLException exception) {
+                opened.close();
+                throw exception;
+            }
+            connection = opened;
+            return connection;
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Failed to open mcauth.db", exception);
         }
     }
 }
