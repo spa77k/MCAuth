@@ -42,28 +42,6 @@ messages:
     1. Minecraftサーバーに接続すると、認証コードが表示されます
     2. 下の「認証コードを入力」ボタンを押して、そのコードを入力してください
     3. 認証が終わると、Minecraftサーバーに入れるようになり、Discordのチャンネルも見られるようになります
-
-    **Minecraft サーバー情報**
-    Java版・統合版のどちらでも遊べます。Minecraft 26.2以上でご参加ください。
-
-    **Java版**
-    サーバーアドレス
-    ```
-    mauritania-radiant.tun.ply.gg
-    ```
-    **統合版**
-    サーバーアドレス
-    ```
-    mauritania-sandbank.tun.ply.gg
-    ```
-    ポート
-    ```
-    24324
-    ```
-    **ご注意**
-    26.2より古いバージョンでは接続できません。お使いのバージョンを確認してから接続してください。
-
-    参加方法の詳しい手順は[こちらのガイド](https://mc.spa77.works/docs/getting-started/)をご覧ください。
   # 認証成功時に本人だけへ表示します。
   # {player}, {uuid}, {discord} が使えます。
   verified: "{player} を認証しました。"
