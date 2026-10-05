@@ -36,7 +36,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     private static final String ALREADY_LINKED_DISCORD_MESSAGE =
             "このDiscordアカウントは、すでに別のMinecraftアカウントと連携済みです。切り替えるには、先に /unlink で解除してください。";
     private static final String LOCKDOWN_MESSAGE =
-            "認証システムを起動できなかったため、現在は入場できません。管理者にお問い合わせください。";
+            "現在、認証システムが使えないため入場できません。運営に知らせてください。";
 
     // key: 認証コード, value: そのコードで認証される予定のMinecraftプレイヤー情報。
     // Discord にコードが投稿されたとき、このMapから探します。
@@ -104,7 +104,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         codeGroupSize = Math.max(0, getConfig().getInt("auth.code-group-size", 3));
         codeUpperBound = powerOfTen(codeLength);
         kickMessage = getConfig().getString("messages.kick", "Discord認証が必要です。\n1. Discordの認証チャンネルで「認証コードを入力」ボタンを押す\n2. 次のコードを入力する: {code}\n3. 認証完了のメッセージが出たら、もう一度接続する");
-        verifiedMessage = getConfig().getString("messages.verified", "{player} を認証しました。");
+        verifiedMessage = getConfig().getString("messages.verified", "{player} として認証できました。Minecraftからもう一度接続してください。");
 
         // Discord Bot を起動します。Token 未設定なら警告を出して起動しません。
         startDiscordBot();
@@ -154,7 +154,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
 
         if (membershipCheckPending) {
             event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
-                    Component.text("Discordの在籍状況を確認中です。しばらく待ってから再接続してください。"));
+                    Component.text("Discordサーバーのメンバー確認中です。少し待ってから、もう一度接続してください。"));
             return;
         }
 
@@ -167,7 +167,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         } catch (IllegalStateException exception) {
             getLogger().log(Level.SEVERE, "Failed to check authentication", exception);
             event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
-                    Component.text("認証情報を確認できませんでした。管理者にお問い合わせください。"));
+                    Component.text("認証の状態を確認できませんでした。時間をおいても入れない場合は、運営に知らせてください。"));
             return;
         }
 
@@ -194,7 +194,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
 
     boolean verifyCode(String code, String discordUserId, String discordUserName, Consumer<String> reply) {
         if (lockdown || membershipCheckPending) {
-            reply.accept("Discordの在籍確認が完了していないため、現在は認証できません。");
+            reply.accept("Discordの在籍確認が終わるまで、認証できません。少し待ってから、もう一度お試しください。");
             return true;
         }
         // 同じDiscordアカウントで複数のMinecraftアカウントを認証しにくくします。
@@ -207,7 +207,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         } catch (IllegalStateException exception) {
             // DBを読めない場合は、コードの誤りとは区別して本人に伝えます。失敗回数には数えません。
             getLogger().log(Level.SEVERE, "Failed to check Discord user", exception);
-            reply.accept("認証を確認できませんでした。管理者にお問い合わせください。");
+            reply.accept("認証を確認できませんでした。時間をおいて、もう一度お試しください。直らない場合は運営に知らせてください。");
             return true;
         }
 
@@ -233,7 +233,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
             Consumer<String> reply
     ) {
         if (lockdown || membershipCheckPending || shuttingDown) {
-            reply.accept("現在は認証できません。しばらく待ってから再試行してください。");
+            reply.accept("現在は認証できません。少し待ってから、もう一度お試しください。");
             return;
         }
         try {
@@ -252,7 +252,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
             }
         } catch (IllegalStateException exception) {
             getLogger().log(Level.SEVERE, "Failed to save authentication", exception);
-            reply.accept("認証を保存できませんでした。管理者にお問い合わせください。");
+            reply.accept("認証を保存できませんでした。時間をおいて、もう一度お試しください。直らない場合は運営に知らせてください。");
             return;
         }
 
@@ -296,8 +296,8 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
                 codeLength,
                 Math.max(1, getConfig().getInt("auth.max-invalid-attempts", 5)),
                 Duration.ofSeconds(Math.max(1, getConfig().getLong("auth.lockout-seconds", 60))),
-                getConfig().getString("messages.invalid-code", "認証コードが無効、または期限切れです。"),
-                getConfig().getString("messages.rate-limited", "認証コードの間違いが多すぎます。しばらく待ってから再試行してください。"),
+                getConfig().getString("messages.invalid-code", "認証コードが合っていないか、期限が切れています。Minecraftに接続し直すと、新しいコードが表示されます。"),
+                getConfig().getString("messages.rate-limited", "コードを続けて間違えたため、少しの間入力できません。しばらく待ってから、もう一度お試しください。"),
                 getConfig().getString("messages.panel", "Minecraftサーバーに接続すると表示される認証コードを、下のボタンから入力してください。"),
                 parseOptionalId(environmentOrConfig(DISCORD_VERIFIED_ROLE_ID_ENV, "discord.verified-role-id", ""))
         );
@@ -393,7 +393,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
                         : "Minecraftとの連携を解除しました。再連携するには、Minecraftサーバーへ接続して新しい認証コードを取得してください。");
             } catch (RuntimeException exception) {
                 getLogger().log(Level.SEVERE, "Failed to unlink Minecraft account", exception);
-                reply.accept("連携解除を完了できませんでした。管理者にお問い合わせください。");
+                reply.accept("連携を解除できませんでした。時間をおいて、もう一度お試しください。直らない場合は運営に知らせてください。");
             }
         });
     }

@@ -114,7 +114,7 @@ class WelcomeMessageTest {
         var fixture = new Fixture();
         fixture.bot.sendWelcome("123");
         verify(fixture.jda).getGuildChannelById(1449580988597403651L);
-        verify(fixture.destination).sendMessageEmbeds(embedWith("<@123> さん、ようこそ！"));
+        verify(fixture.destination).sendMessageEmbeds(embedWith("<@123> さん、認証が完了しました。ようこそ！"));
     }
 
     @Test void skipsDisabledAndOtherGuildDestinationsAndHandlesSendFailure() throws Exception {

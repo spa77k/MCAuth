@@ -303,7 +303,7 @@ final class DiscordVerificationBot extends ListenerAdapter {
         // 歓迎の投稿に失敗しても、保存済みの認証と本人への成功応答は維持します。
         try {
             String id = plugin.getConfig().getString("discord.welcome-channel-id", "1449580988597403651").trim();
-            String template = plugin.getConfig().getString("messages.welcome", "{mention} さん、ようこそ！");
+            String template = plugin.getConfig().getString("messages.welcome", "{mention} さん、認証が完了しました。ようこそ！");
             if (id.isBlank() || template.isBlank()) {
                 return;
             }
@@ -361,11 +361,11 @@ final class DiscordVerificationBot extends ListenerAdapter {
     }
 
     private String invalidCodeText() {
-        return invalidCodeMessage.isBlank() ? "認証コードが無効、または期限切れです。" : invalidCodeMessage;
+        return invalidCodeMessage.isBlank() ? "認証コードが合っていないか、期限が切れています。Minecraftに接続し直すと、新しいコードが表示されます。" : invalidCodeMessage;
     }
 
     private String rateLimitedText() {
-        return rateLimitedMessage.isBlank() ? "認証コードの間違いが多すぎます。しばらく待ってから再試行してください。" : rateLimitedMessage;
+        return rateLimitedMessage.isBlank() ? "コードを続けて間違えたため、少しの間入力できません。しばらく待ってから、もう一度お試しください。" : rateLimitedMessage;
     }
 
     private boolean isLockedOut(long discordUserId, Instant now) {

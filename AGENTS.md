@@ -15,4 +15,4 @@
 - 完成条件は本人だけの解除、どのチャンネルからでも解除できること、未連携時の応答、保存と再読み込み、即時切断。`mvn test package` で回帰検証する。
 - Discordに出す文面（認証チャンネルの案内、本人だけの応答、歓迎メッセージ）は、基本すべてEmbedで出す。失敗・制限は赤、それ以外は青の帯にする。Embed内のメンションは通知されないため、歓迎メッセージは通知を飛ばさない。
 - インフラへの反映は、依頼されたときだけ行う。実装の依頼ではコミットまでで止め、pushもしない。「SHA更新まで」と頼まれたら、MCAuthをpush→`https://codeload.github.com/spa77k/MCAuth/tar.gz/<コミット>`のSHA-256を計算→`../spsmc-infra`の`compose.yml`と`Dockerfile`の両方の`MCAUTH_REF`・`MCAUTH_SOURCE_SHA256`を更新→テスト→infraをコミット、までを行う。infraのpush、本番のpull、再起動は別に頼まれるまでしない。
-- 認証のDB保存成功後、`discord.welcome-channel-id`（既定 `1449580988597403651`）へ `messages.welcome`（既定 `{mention} さん、ようこそ！`）を投稿する。歓迎文にはMinecraft名を含めない。投稿先と文面はconfig.ymlで変更でき、どちらかが空なら投稿しない。認証失敗や連携済みの場合は投稿せず、投稿失敗で認証成功を取り消さない。
+- 認証のDB保存成功後、`discord.welcome-channel-id`（既定 `1449580988597403651`）へ `messages.welcome`（既定 `{mention} さん、認証が完了しました。ようこそ！`）を投稿する。歓迎文にはMinecraft名を含めない。投稿先と文面はconfig.ymlで変更でき、どちらかが空なら投稿しない。認証失敗や連携済みの場合は投稿せず、投稿失敗で認証成功を取り消さない。
