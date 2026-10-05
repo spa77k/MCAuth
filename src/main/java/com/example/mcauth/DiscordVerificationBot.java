@@ -185,7 +185,9 @@ final class DiscordVerificationBot extends ListenerAdapter {
     private void postPanel(GuildMessageChannel channel) {
         Button button = Button.primary(VERIFY_BUTTON_ID, "認証コードを入力");
         long selfId = channel.getJDA().getSelfUser().getIdLong();
-        // 再起動のたびに案内が増えないよう、以前Botが置いた案内があれば書き換えます。
+        MessageEmbed panel = embed(panelMessage);
+        // 再起動のたびに案内が増えないよう、以前Botが置いた案内があれば再利用します。
+        // 「(編集済み)」を出さないため、編集はせず、文面が同じならそのまま、違えば削除して投稿し直します。
         channel.getHistory().retrievePast(50).queue(messages -> {
             Message existing = messages.stream()
                     .filter(message -> message.getAuthor().getIdLong() == selfId)
@@ -193,15 +195,28 @@ final class DiscordVerificationBot extends ListenerAdapter {
                             .anyMatch(b -> VERIFY_BUTTON_ID.equals(b.getId())))
                     .findFirst()
                     .orElse(null);
+            if (existing != null && isSamePanel(existing, panel)) {
+                return;
+            }
+            Runnable post = () -> channel.sendMessageEmbeds(panel).setActionRow(button).queue(
+                    ok -> {}, error -> plugin.getLogger().log(Level.SEVERE, "Failed to post verify panel", error));
             if (existing != null) {
-                // 以前の本文が残らないよう、本文は空にして Embed に置き換えます。
-                existing.editMessageEmbeds(embed(panelMessage)).setContent(null).setActionRow(button).queue(
-                        ok -> {}, error -> plugin.getLogger().log(Level.SEVERE, "Failed to update verify panel", error));
+                existing.delete().queue(ok -> post.run(),
+                        error -> plugin.getLogger().log(Level.SEVERE, "Failed to delete old verify panel", error));
             } else {
-                channel.sendMessageEmbeds(embed(panelMessage)).setActionRow(button).queue(
-                        ok -> {}, error -> plugin.getLogger().log(Level.SEVERE, "Failed to post verify panel", error));
+                post.run();
             }
         }, error -> plugin.getLogger().log(Level.SEVERE, "Failed to read verify channel history", error));
+    }
+
+    private static boolean isSamePanel(Message existing, MessageEmbed panel) {
+        if (!existing.getContentRaw().isEmpty() || existing.getEmbeds().size() != 1) {
+            return false;
+        }
+        MessageEmbed current = existing.getEmbeds().get(0);
+        return java.util.Objects.equals(current.getDescription(), panel.getDescription())
+                && current.getColorRaw() == panel.getColorRaw()
+                && current.getTitle() == null && current.getFields().isEmpty();
     }
 
     @Override

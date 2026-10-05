@@ -70,6 +70,49 @@ class ButtonVerificationTest {
                                 && DiscordVerificationBot.VERIFY_BUTTON_ID.equals(b.getId())));
     }
 
+    private net.dv8tion.jda.api.entities.channel.concrete.TextChannel readyWithExistingPanel(
+            MCAuthPlugin plugin, String description) {
+        var event = mock(net.dv8tion.jda.api.events.session.ReadyEvent.class, RETURNS_DEEP_STUBS);
+        var channel = mock(net.dv8tion.jda.api.entities.channel.concrete.TextChannel.class, RETURNS_DEEP_STUBS);
+        when(event.getJDA().getGuildChannelById(42L)).thenReturn(channel);
+        when(channel.getJDA().getSelfUser().getIdLong()).thenReturn(7L);
+        var existing = mock(net.dv8tion.jda.api.entities.Message.class, RETURNS_DEEP_STUBS);
+        when(existing.getAuthor().getIdLong()).thenReturn(7L);
+        var old = mock(net.dv8tion.jda.api.interactions.components.buttons.Button.class);
+        when(old.getId()).thenReturn(DiscordVerificationBot.VERIFY_BUTTON_ID);
+        when(existing.getButtons()).thenReturn(java.util.List.of(old));
+        when(existing.getContentRaw()).thenReturn("");
+        when(existing.getEmbeds()).thenReturn(java.util.List.of(DiscordVerificationBot.embed(description)));
+        var history = channel.getHistory().retrievePast(50);
+        doAnswer(call -> {
+            call.getArgument(0, Consumer.class).accept(java.util.List.of(existing));
+            return null;
+        }).when(history).queue(any(Consumer.class), any(Consumer.class));
+        var deletion = existing.delete();
+        doAnswer(call -> {
+            call.getArgument(0, Consumer.class).accept(null);
+            return null;
+        }).when(deletion).queue(any(Consumer.class), any(Consumer.class));
+        bot(plugin, 5).onReady(event);
+        verify(existing, never()).editMessageEmbeds(any(MessageEmbed.class));
+        if (description.equals("panel")) {
+            verify(deletion, never()).queue(any(Consumer.class), any(Consumer.class));
+        } else {
+            verify(deletion).queue(any(Consumer.class), any(Consumer.class));
+        }
+        return channel;
+    }
+
+    @Test void keepsUnchangedPanelWithoutEditing() {
+        var channel = readyWithExistingPanel(mock(MCAuthPlugin.class), "panel");
+        verify(channel, never()).sendMessageEmbeds(any(MessageEmbed.class));
+    }
+
+    @Test void replacesChangedPanelByDeletingAndPostingInsteadOfEditing() {
+        var channel = readyWithExistingPanel(mock(MCAuthPlugin.class), "old panel");
+        verify(channel).sendMessageEmbeds(embedWith("panel"));
+    }
+
     @Test void buttonOpensCodeFormOnlyInVerifyChannel() {
         MCAuthPlugin plugin = mock(MCAuthPlugin.class);
         DiscordVerificationBot bot = bot(plugin, 5);
