@@ -2,8 +2,8 @@
 discord:
   # Discord Bot Token を入れます。GitHubには本物のTokenを絶対に載せないでください。
   token: "PUT_DISCORD_BOT_TOKEN_HERE"
-  # 認証ボタンを置くDiscordチャンネルIDを入れます。
-  channel-id: "1481576484274573414"
+  # 認証ボタンを置くDiscordチャンネルIDを入れます。未設定では認証・入場を受け付けません。
+  channel-id: ""
   # 認証成功後に歓迎メッセージを投稿するチャンネルIDです。空なら投稿しません。
   # 認証チャンネルと同じサーバー内に置き、Botに閲覧・送信権限を付けてください。
   welcome-channel-id: "1449580988597403651"

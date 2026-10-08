@@ -63,7 +63,7 @@ white-list=false
 ```yaml
 discord:
   token: "PUT_DISCORD_BOT_TOKEN_HERE"
-  channel-id: "1481576484274573414"
+  channel-id: ""
   welcome-channel-id: "1449580988597403651"
   verified-role-id: ""
 
@@ -81,7 +81,7 @@ auth:
 ### 設定項目
 
 - `discord.token`: Discord Bot の Token
-- `discord.channel-id`: 認証ボタンを置く Discord チャンネル ID。Bot 起動時にボタン付きの案内を投稿し、以前の案内があれば書き換えます
+- `discord.channel-id`: 認証ボタンを置く Discord チャンネル ID。既定は空で、環境変数でも指定されていなければ認証・入場を受け付けません。Bot 起動時にボタン付きの案内を投稿し、以前の案内があれば書き換えます
 - `discord.verified-role-id`: 認証成功時に付けるロール ID。`/unlink` で連携を解除すると外します。空なら付けません
 - `discord.welcome-channel-id`: 認証成功後の歓迎メッセージの投稿先。既定は `1449580988597403651`。認証チャンネルと同じサーバー内のチャンネルを指定し、Botに閲覧・送信権限を付けてください。空なら投稿しません
 - `messages.welcome`: 歓迎メッセージの文面。既定は `{mention} さん、認証が完了しました。ようこそ！`。`{mention}` は本人へのメンションに置き換わります。空なら投稿しません。DB保存成功時だけ投稿し、失敗・連携済み・Bot再起動時には投稿しません。解除後に再認証した場合は再び投稿します。投稿に失敗しても認証は維持し、ログに記録します
