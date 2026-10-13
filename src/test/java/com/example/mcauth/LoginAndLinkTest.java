@@ -116,6 +116,19 @@ class LoginAndLinkTest {
         assertTrue(pendingCodes.containsKey("1234"));
     }
 
+    @Test void marketIdentityFollowsDiscordLinkAndDisappearsAfterUnlink() {
+        VerificationStore store = store();
+        UUID owner = UUID.randomUUID();
+        assertEquals(VerificationStore.AuthenticationResult.SAVED,
+                store.authenticateIfAvailable(owner, "Owner", "123", "owner"));
+        AuthenticatedPlayer linked = store.findByDiscordUserId("123");
+        assertNotNull(linked);
+        assertEquals(owner, linked.uuid());
+        assertNull(store.findByDiscordUserId("456"));
+        store.deauthenticateByDiscordUserId("123");
+        assertNull(store.findByDiscordUserId("123"));
+    }
+
     @Test void revokesOnlyWhenLeavingVerifyGuild() {
         MCAuthPlugin plugin = mock(MCAuthPlugin.class);
         DiscordVerificationBot bot = new DiscordVerificationBot(plugin, 42L, 6, 5,

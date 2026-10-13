@@ -20,6 +20,8 @@ import java.util.function.Function;
 import java.util.concurrent.CompletableFuture;
 import java.util.ArrayList;
 import java.util.List;
+import org.bukkit.plugin.Plugin;
+import java.lang.reflect.Method;
 
 // Paper が最初に読み込むプラグイン本体です。
 // Minecraft 側の接続チェック、認証コード発行、認証済みプレイヤーのDB登録を担当します。
@@ -74,6 +76,91 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
 
     // Discordで認証成功時に送る文章です。
     private String verifiedMessage;
+
+    /** Discord の操作を認証済み本人としてメインスレッドの各プラグインへ渡す。 */
+    void marketCall(String discordId, String operation, int[] numbers, Consumer<Object> reply) {
+        Bukkit.getScheduler().runTask(this, () -> {
+            if (lockdown || membershipCheckPending || shuttingDown || store == null) {
+                reply.accept("現在この操作を利用できません。");
+                return;
+            }
+            try {
+                AuthenticatedPlayer player = store.findByDiscordUserId(discordId);
+                if (player == null) {
+                    reply.accept("Minecraftアカウントの認証を完了してください。");
+                    return;
+                }
+                boolean auction = !operation.equals("requests") && !operation.equals("accept");
+                Plugin target = Bukkit.getPluginManager().getPlugin(auction ? "AuctionHouse" : "ContractBoard");
+                if (target == null || !target.isEnabled()) {
+                    reply.accept("この機能は現在利用できません。");
+                    return;
+                }
+                if (operation.equals("bid")) {
+                    Plugin loans = Bukkit.getPluginManager().getPlugin("EcoLifeAssist");
+                    if (loans != null) {
+                        if (!loans.isEnabled()) {
+                            reply.accept("借金の状態を確認できないため、入札できません。");
+                            return;
+                        }
+                        Object overdue = loans.getClass().getMethod("isLoanOverdue", UUID.class)
+                                .invoke(loans, player.uuid());
+                        if (Boolean.TRUE.equals(overdue)) {
+                            reply.accept("借金の返済期限を過ぎているため、入札できません。");
+                            return;
+                        }
+                    }
+                }
+                String methodName;
+                Class<?>[] signature;
+                Object[] arguments;
+                switch (operation) {
+                    case "listings" -> { methodName = "discordListings"; signature = new Class<?>[0]; arguments = new Object[0]; }
+                    case "staged" -> { methodName = "discordStaged"; signature = new Class<?>[]{UUID.class}; arguments = new Object[]{player.uuid()}; }
+                    case "requests" -> { methodName = "discordOpenRequests"; signature = new Class<?>[0]; arguments = new Object[0]; }
+                    case "bid" -> {
+                        methodName = "discordBid";
+                        signature = new Class<?>[]{UUID.class, String.class, int.class, int.class};
+                        arguments = new Object[]{player.uuid(), player.playerName(), numbers[0], numbers[1]};
+                    }
+                    case "sell" -> {
+                        methodName = "discordSell";
+                        signature = new Class<?>[]{UUID.class, String.class, int.class, int.class, int.class, int.class};
+                        arguments = new Object[]{player.uuid(), player.playerName(), numbers[0], numbers[1], numbers[2], numbers[3]};
+                    }
+                    case "accept" -> {
+                        methodName = "discordAccept";
+                        signature = new Class<?>[]{UUID.class, String.class, int.class};
+                        arguments = new Object[]{player.uuid(), player.playerName(), numbers[0]};
+                    }
+                    default -> { reply.accept("操作を認識できませんでした。"); return; }
+                }
+                Method method = target.getClass().getMethod(methodName, signature);
+                reply.accept(method.invoke(target, arguments));
+            } catch (Exception exception) {
+                getLogger().log(Level.WARNING, "Discordからの取引に失敗しました", exception);
+                reply.accept("取引に失敗しました。時間をおいて再度お試しください。");
+            }
+        });
+    }
+
+    void marketPublicList(String operation, Consumer<Object> reply) {
+        Bukkit.getScheduler().runTask(this, () -> {
+            try {
+                String pluginName = operation.equals("listings") ? "AuctionHouse" : "ContractBoard";
+                String methodName = operation.equals("listings") ? "discordListings" : "discordOpenRequests";
+                Plugin target = Bukkit.getPluginManager().getPlugin(pluginName);
+                if (target == null || !target.isEnabled()) {
+                    reply.accept(java.util.List.of());
+                    return;
+                }
+                reply.accept(target.getClass().getMethod(methodName).invoke(target));
+            } catch (Exception exception) {
+                getLogger().log(Level.WARNING, "Discord用一覧の取得に失敗しました", exception);
+                reply.accept(java.util.List.of());
+            }
+        });
+    }
 
     @Override
     public void onEnable() {

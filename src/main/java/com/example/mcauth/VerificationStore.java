@@ -64,6 +64,21 @@ final class VerificationStore implements AutoCloseable {
         return exists("SELECT 1 FROM authenticated_players WHERE discord_user_id = ?", discordUserId);
     }
 
+    synchronized AuthenticatedPlayer findByDiscordUserId(String discordUserId) {
+        try (PreparedStatement statement = connection().prepareStatement(
+                "SELECT uuid, name, discord_user_id, discord_user_name FROM authenticated_players WHERE discord_user_id = ?")) {
+            statement.setString(1, discordUserId);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return null;
+                return new AuthenticatedPlayer(UUID.fromString(result.getString("uuid")),
+                        result.getString("name"), result.getString("discord_user_id"),
+                        result.getString("discord_user_name"));
+            }
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Failed to read linked Minecraft player", exception);
+        }
+    }
+
     synchronized AuthenticationResult authenticateIfAvailable(UUID uuid, String playerName, String discordUserId, String discordUserName) {
         // 確認と保存を同じロック内で行い、同じDiscord IDの二重認証を防ぎます。
         if (isDiscordUserAuthenticated(discordUserId)) {
