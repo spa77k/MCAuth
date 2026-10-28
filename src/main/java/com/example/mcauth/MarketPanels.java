@@ -294,7 +294,12 @@ final class MarketPanels extends ListenerAdapter {
     }
 
     private static String name(Map<String, String> record, boolean auction) {
-        return auction ? record.get("item") + " ×" + record.get("amount") : record.get("title");
+        return plain(auction ? record.get("item") + " ×" + record.get("amount") : record.get("title"));
+    }
+
+    // Minecraftの色・装飾コード（§6 など）はDiscordでは色にならず文字のまま出るため取り除く。
+    static String plain(String text) {
+        return text == null ? null : text.replaceAll("§.?", "");
     }
 
     private static String summary(Map<String, String> record, boolean auction) {
@@ -335,7 +340,7 @@ final class MarketPanels extends ListenerAdapter {
 
     static String detail(Map<String, String> record, boolean auction) {
         String text = line(record, auction);
-        String note = record.get("description");
+        String note = plain(record.get("description"));
         return note == null || note.isBlank() ? text : text + "\n\n" + note;
     }
 
@@ -394,7 +399,7 @@ final class MarketPanels extends ListenerAdapter {
         if (staged.isEmpty()) description.append("ゲーム内で品物を手に持ち、`/ah deposit` で預けてください。\n");
         List<ActionRow> rows = new ArrayList<>();
         for (Map<String, String> item : staged.stream().limit(5).toList()) {
-            description.append("`#").append(item.get("id")).append("` ").append(item.get("item"))
+            description.append("`#").append(item.get("id")).append("` ").append(plain(item.get("item")))
                     .append(" ×").append(item.get("amount")).append('\n');
             rows.add(ActionRow.of(Button.success("market:sell:" + item.get("id"),
                     "出品 " + item.get("id"))));

@@ -51,4 +51,12 @@ class MarketPanelsTest {
         assertEquals("残り30分", MarketPanels.remaining(NOW + 30 * 60_000L, NOW));
         assertEquals("まもなく終了", MarketPanels.remaining(NOW - 1, NOW));
     }
+
+    @Test void minecraftColorCodesAreRemovedFromNames() {
+        Map<String, String> listing = Map.of("id", "68", "item", "§6完全§l身代わりの護符§r", "amount", "1",
+                "minBid", "750", "buyout", "0", "expires", String.valueOf(NOW));
+        assertEquals("#68 完全身代わりの護符 ×1",
+                MarketPanels.picker(List.of(listing), true, NOW).getOptions().get(0).getLabel());
+        assertEquals("赤い剣", MarketPanels.plain("§x§f§f§0§0§0§0赤い剣"));
+    }
 }
