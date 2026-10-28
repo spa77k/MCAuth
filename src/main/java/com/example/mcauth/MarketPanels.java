@@ -10,10 +10,13 @@ import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.events.interaction.ModalInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
+import net.dv8tion.jda.api.events.interaction.component.StringSelectInteractionEvent;
 import net.dv8tion.jda.api.events.session.ReadyEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.interactions.components.ActionRow;
 import net.dv8tion.jda.api.interactions.components.buttons.Button;
+import net.dv8tion.jda.api.interactions.components.selections.SelectOption;
+import net.dv8tion.jda.api.interactions.components.selections.StringSelectMenu;
 import net.dv8tion.jda.api.interactions.components.text.TextInput;
 import net.dv8tion.jda.api.interactions.components.text.TextInputStyle;
 import net.dv8tion.jda.api.interactions.modals.Modal;
@@ -123,19 +126,14 @@ final class MarketPanels extends ListenerAdapter {
                     ? "**出品中のオークション**\n手持ち品を先に `/ah deposit` で預けると、ここから出品できます。\n"
                     : "**募集中の依頼**\n受諾した依頼の納品はゲーム内で行ってください。\n");
             if (records.isEmpty()) description.append("現在、募集中のものはありません。\n");
-            for (int i = 0; i < Math.min(PAGE_SIZE, records.size()); i++) {
-                description.append(line(records.get(i), auction)).append('\n');
+            List<Map<String, String>> shown = records.subList(0, Math.min(PAGE_SIZE, records.size()));
+            for (Map<String, String> record : shown) {
+                description.append('\n').append(line(record, auction)).append('\n');
             }
             MessageEmbed embed = new EmbedBuilder().setDescription(description.toString())
                     .setColor(0x5865F2).build();
             List<ActionRow> rows = new ArrayList<>();
-            List<Button> buttons = new ArrayList<>();
-            for (int i = 0; i < Math.min(PAGE_SIZE, records.size()); i++) {
-                String id = records.get(i).get("id");
-                buttons.add(Button.primary("market:" + (auction ? "bid" : "accept") + ":" + id,
-                        (auction ? "入札 " : "受諾 ") + id));
-            }
-            if (!buttons.isEmpty()) rows.add(ActionRow.of(buttons));
+            if (!shown.isEmpty()) rows.add(ActionRow.of(picker(shown, auction, System.currentTimeMillis())));
             rows.add(ActionRow.of(auction
                     ? List.of(Button.secondary("market:page:auction:0", "全件を見る"),
                             Button.success("market:staged", "預かり品から出品"))
@@ -225,6 +223,21 @@ final class MarketPanels extends ListenerAdapter {
     }
 
     @Override
+    public void onStringSelectInteraction(@NotNull StringSelectInteractionEvent event) {
+        String[] parts = event.getComponentId().split(":");
+        if (parts.length != 3 || !parts[0].equals("market") || !parts[1].equals("pick")) return;
+        if (!sameGuild(event.getGuild())) {
+            event.replyEmbeds(DiscordVerificationBot.errorEmbed("このサーバーの市場画面を使ってください。"))
+                    .setEphemeral(true).queue();
+            return;
+        }
+        boolean auction = parts[2].equals("auction");
+        String id = event.getValues().isEmpty() ? "" : event.getValues().get(0);
+        event.deferReply(true).queue(hook -> plugin.marketCall(event.getUser().getId(),
+                auction ? "listings" : "requests", new int[0], value -> showDetail(hook, value, auction, id)));
+    }
+
+    @Override
     public void onModalInteraction(@NotNull ModalInteractionEvent event) {
         String[] parts = event.getModalId().split(":");
         if (parts.length != 3 || !parts[0].equals("market")) return;
@@ -275,18 +288,74 @@ final class MarketPanels extends ListenerAdapter {
         return value instanceof List<?> list ? (List<Map<String, String>>) list : List.of();
     }
 
-    private static String line(Map<String, String> record, boolean auction) {
-        String deadline = "<t:" + (Long.parseLong(record.get("expires")) / 1000L) + ":R>";
+    // 一覧の1件は「太字の番号と名前」と「要点1行」の2行にし、説明文は詳細画面だけに出す。
+    static String line(Map<String, String> record, boolean auction) {
+        return "**`#" + record.get("id") + "` " + name(record, auction) + "**\n" + summary(record, auction);
+    }
+
+    private static String name(Map<String, String> record, boolean auction) {
+        return auction ? record.get("item") + " ×" + record.get("amount") : record.get("title");
+    }
+
+    private static String summary(Map<String, String> record, boolean auction) {
+        String deadline = "終了 <t:" + (Long.parseLong(record.get("expires")) / 1000L) + ":R>";
         return auction
-                ? "`#" + record.get("id") + "` " + record.get("item") + " ×" + record.get("amount")
-                        + "／最低入札 " + record.get("minBid") + "S"
-                        + ("0".equals(record.get("buyout")) ? "" : "／即決 " + record.get("buyout") + "S")
-                        + "／終了 " + deadline
-                : "`#" + record.get("id") + "` " + record.get("title") + "／報酬 "
-                        + record.get("reward") + "S／終了 " + deadline
-                        + ("0".equals(record.get("minStars")) ? "" : "／必要評価 ★" + record.get("minStars"))
-                        + ("true".equals(record.get("itemDelivery")) ? "／アイテム納品あり" : "")
-                        + "\n　" + record.get("description");
+                ? "最低入札 " + record.get("minBid") + "S"
+                        + ("0".equals(record.get("buyout")) ? "" : " ・ 即決 " + record.get("buyout") + "S")
+                        + " ・ " + deadline
+                : "報酬 " + record.get("reward") + "S ・ " + deadline
+                        + ("0".equals(record.get("minStars")) ? "" : " ・ 必要評価 ★" + record.get("minStars"))
+                        + ("true".equals(record.get("itemDelivery")) ? " ・ アイテム納品あり" : "");
+    }
+
+    // プルダウンの項目には時刻表示が使えないため、残り時間を文字で出す。
+    static StringSelectMenu picker(List<Map<String, String>> records, boolean auction, long now) {
+        StringSelectMenu.Builder menu = StringSelectMenu.create("market:pick:" + (auction ? "auction" : "request"))
+                .setPlaceholder(auction ? "出品を選んで詳しく見る" : "依頼を選んで詳しく見る");
+        for (Map<String, String> record : records) {
+            String price = auction ? "最低入札 " + record.get("minBid") + "S" : "報酬 " + record.get("reward") + "S";
+            menu.addOptions(SelectOption.of(clip("#" + record.get("id") + " " + name(record, auction)),
+                            record.get("id"))
+                    .withDescription(clip(price + " ・ " + remaining(Long.parseLong(record.get("expires")), now))));
+        }
+        return menu.build();
+    }
+
+    static String remaining(long expires, long now) {
+        long minutes = Math.max(0L, (expires - now) / 60_000L);
+        if (minutes >= 24 * 60) return "残り" + minutes / (24 * 60) + "日";
+        if (minutes >= 60) return "残り" + minutes / 60 + "時間";
+        return minutes > 0 ? "残り" + minutes + "分" : "まもなく終了";
+    }
+
+    private static String clip(String text) {
+        return text.length() <= SelectOption.LABEL_MAX_LENGTH ? text
+                : text.substring(0, SelectOption.LABEL_MAX_LENGTH - 1) + "…";
+    }
+
+    static String detail(Map<String, String> record, boolean auction) {
+        String text = line(record, auction);
+        String note = record.get("description");
+        return note == null || note.isBlank() ? text : text + "\n\n" + note;
+    }
+
+    private void showDetail(net.dv8tion.jda.api.interactions.InteractionHook hook,
+                            Object value, boolean auction, String id) {
+        if (!(value instanceof List<?>)) {
+            hook.editOriginalEmbeds(DiscordVerificationBot.errorEmbed(String.valueOf(value))).queue();
+            return;
+        }
+        Map<String, String> record = records(value).stream()
+                .filter(candidate -> id.equals(candidate.get("id"))).findFirst().orElse(null);
+        if (record == null) {
+            hook.editOriginalEmbeds(DiscordVerificationBot.errorEmbed(
+                    auction ? "この出品はすでに終了しています。" : "この依頼はすでに締め切られています。")).queue();
+            return;
+        }
+        hook.editOriginalEmbeds(DiscordVerificationBot.embed(detail(record, auction)))
+                .setActionRow(auction ? Button.primary("market:bid:" + id, "入札する")
+                        : Button.success("market:doaccept:" + id, "受諾を確定"))
+                .queue();
     }
 
     private void showPage(net.dv8tion.jda.api.interactions.InteractionHook hook,
@@ -299,16 +368,13 @@ final class MarketPanels extends ListenerAdapter {
         int page = Math.min(requestedPage, Math.max(0, (records.size() - 1) / PAGE_SIZE));
         int start = page * PAGE_SIZE;
         StringBuilder description = new StringBuilder(auction ? "**オークション一覧**\n" : "**依頼一覧**\n");
-        List<Button> actions = new ArrayList<>();
-        for (int i = start; i < Math.min(start + PAGE_SIZE, records.size()); i++) {
-            Map<String, String> record = records.get(i);
-            description.append(line(record, auction)).append('\n');
-            actions.add(Button.primary("market:" + (auction ? "bid" : "accept") + ":" + record.get("id"),
-                    (auction ? "入札 " : "受諾 ") + record.get("id")));
+        List<Map<String, String>> shown = records.subList(start, Math.min(start + PAGE_SIZE, records.size()));
+        for (Map<String, String> record : shown) {
+            description.append('\n').append(line(record, auction)).append('\n');
         }
         if (records.isEmpty()) description.append("現在、募集中のものはありません。\n");
         List<ActionRow> rows = new ArrayList<>();
-        if (!actions.isEmpty()) rows.add(ActionRow.of(actions));
+        if (!shown.isEmpty()) rows.add(ActionRow.of(picker(shown, auction, System.currentTimeMillis())));
         List<Button> navigation = new ArrayList<>();
         if (page > 0) navigation.add(Button.secondary("market:page:" + (auction ? "auction" : "request")
                 + ":" + (page - 1), "前へ"));
