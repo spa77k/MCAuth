@@ -96,21 +96,6 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
                     reply.accept("この機能は現在利用できません。");
                     return;
                 }
-                if (operation.equals("bid")) {
-                    Plugin loans = Bukkit.getPluginManager().getPlugin("EcoLifeAssist");
-                    if (loans != null) {
-                        if (!loans.isEnabled()) {
-                            reply.accept("借金の状態を確認できないため、入札できません。");
-                            return;
-                        }
-                        Object overdue = loans.getClass().getMethod("isLoanOverdue", UUID.class)
-                                .invoke(loans, player.uuid());
-                        if (Boolean.TRUE.equals(overdue)) {
-                            reply.accept("借金の返済期限を過ぎているため、入札できません。");
-                            return;
-                        }
-                    }
-                }
                 String methodName;
                 Class<?>[] signature;
                 Object[] arguments;
