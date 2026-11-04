@@ -1,0 +1,20 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    uses: spa77k/paper-plugin-kit/.github/workflows/paper-plugin.yml@main
+    with:
+      jar: target/mcauth-*.jar
