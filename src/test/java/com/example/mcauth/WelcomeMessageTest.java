@@ -35,6 +35,7 @@ class WelcomeMessageTest {
     @EnumSource(VerificationStore.AuthenticationResult.class)
     void welcomesOnlyAfterSuccessfulSave(VerificationStore.AuthenticationResult result) throws Exception {
         MCAuthPlugin plugin = mock(MCAuthPlugin.class, CALLS_REAL_METHODS);
+        doReturn(java.util.logging.Logger.getAnonymousLogger()).when(plugin).getLogger();
         var store = mock(VerificationStore.class);
         var bot = mock(DiscordVerificationBot.class);
         UUID uuid = UUID.randomUUID();

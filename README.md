@@ -173,6 +173,23 @@ plugins/MCAuth/mcauth.db
 
 以前のバージョンが使っていた `plugins/MCAuth/data.yml` は読み込みません。自動では移行しないため、引き継ぐ場合は `data.yml` の内容を上のテーブルへ登録してください。
 
+## 連携・解除のログ
+
+連携の保存と解除に成功したときだけ、サーバーログへ1行ずつ出します。失敗や、連携済み・未連携で何も変わらなかったときは出しません。
+
+```text
+[MCAuth] Link event: reason=link player=Steve uuid=069a79f4-44e9-4726-a5be-fca90e38aaf5 discord_id=123456789012345678 discord_name=alice
+```
+
+`reason` は次のどれかです。解除のときの名前は、DBに保存されていた認証時の名前です。名前の空白・改行は `_` に、空の値は `-` にします。
+
+| `reason` | いつ出るか |
+| --- | --- |
+| `link` | 認証コードで連携を保存したとき |
+| `unlink` | 本人が `/unlink` で解除したとき |
+| `left` | 認証チャンネルのあるDiscordサーバーを退出して解除したとき |
+| `startup-check` | Bot起動時の在籍確認で、退出済みとして解除したとき |
+
 ## 注意事項
 
 - Discord Bot Token は GitHub や公開チャットに絶対に載せないでください。

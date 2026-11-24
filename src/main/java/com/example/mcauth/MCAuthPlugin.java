@@ -402,8 +402,8 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
                     reply.accept("このMinecraftアカウントは、すでに別のDiscordアカウントと連携済みです。");
                     return;
                 }
-                case SAVED -> {
-                }
+                case SAVED -> getLogger().info(linkEventLine("link", new AuthenticatedPlayer(
+                        verification.uuid(), verification.playerName(), discordUserId, discordUserName)));
             }
         } catch (IllegalStateException exception) {
             getLogger().log(Level.SEVERE, "Failed to save authentication", exception);
@@ -514,7 +514,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
                         throw new IllegalStateException("Failed to check Discord membership", error);
                     }
                     for (String id : departed) {
-                        revokeOnMainThread(id, true);
+                        revokeOnMainThread(id, "startup-check");
                     }
                     membershipCheckPending = false;
                 } catch (RuntimeException exception) {
@@ -558,7 +558,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     void unlinkDiscordUser(String discordUserId, Consumer<String> reply) {
         Bukkit.getScheduler().runTask(this, () -> {
             try {
-                AuthenticatedPlayer revoked = revokeOnMainThread(discordUserId, true);
+                AuthenticatedPlayer revoked = revokeOnMainThread(discordUserId, "unlink");
                 // 本人が解除したときは、認証で付けたロールも外します。
                 if (revoked != null && discordBot != null) {
                     discordBot.removeVerifiedRole(discordUserId);
@@ -577,7 +577,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         // 認証の確定と解除をメインスレッドで順番に処理します。
         Bukkit.getScheduler().runTask(this, () -> {
             try {
-                revokeOnMainThread(discordUserId, true);
+                revokeOnMainThread(discordUserId, "left");
             } catch (RuntimeException exception) {
                 getLogger().log(Level.SEVERE, "Failed to revoke departed Discord user", exception);
                 enterLockdown();
@@ -585,20 +585,40 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         });
     }
 
-    private AuthenticatedPlayer revokeOnMainThread(String discordUserId, boolean disconnect) {
+    private AuthenticatedPlayer revokeOnMainThread(String discordUserId, String reason) {
         // Discord ID に紐づく認証を取り消します。
         AuthenticatedPlayer revoked = store.deauthenticateByDiscordUserId(discordUserId);
         if (revoked == null) {
             return null;
         }
+        getLogger().info(linkEventLine(reason, revoked));
         removeCodeForUuid(revoked.uuid());
-        if (disconnect) {
-            org.bukkit.entity.Player player = Bukkit.getPlayer(revoked.uuid());
-            if (player != null) {
-                player.kick(Component.text("Discordとの連携を解除しました。再接続してDiscord認証を行ってください。"));
-            }
+        org.bukkit.entity.Player player = Bukkit.getPlayer(revoked.uuid());
+        if (player != null) {
+            player.kick(Component.text("Discordとの連携を解除しました。再接続してDiscord認証を行ってください。"));
         }
         return revoked;
+    }
+
+    // 連携と解除を、あとからログで追えるように1行で書き出します。
+    // reason は link / unlink / left / startup-check のいずれかです。
+    static String linkEventLine(String reason, AuthenticatedPlayer player) {
+        return "Link event: reason=" + reason
+                + " player=" + logValue(player.playerName())
+                + " uuid=" + player.uuid()
+                + " discord_id=" + logValue(player.discordUserId())
+                + " discord_name=" + logValue(player.discordUserName());
+    }
+
+    // 名前に空白や改行が入っても1行の key=value の形が崩れないよう、置き換えます。
+    private static String logValue(String value) {
+        if (value == null || value.isEmpty()) {
+            return "-";
+        }
+        StringBuilder builder = new StringBuilder(value.length());
+        value.codePoints().forEach(c -> builder.appendCodePoint(
+                Character.isWhitespace(c) || Character.isISOControl(c) || Character.isSpaceChar(c) ? '_' : c));
+        return builder.toString();
     }
 
     private synchronized String createCode(String playerName, UUID uuid) {

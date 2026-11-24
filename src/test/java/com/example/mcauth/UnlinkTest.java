@@ -114,6 +114,7 @@ class UnlinkTest {
 
     @Test void unlinkKicksLeavesWhitelistUntouchedAndReportsMissingLink() throws Exception {
         MCAuthPlugin plugin = mock(MCAuthPlugin.class, CALLS_REAL_METHODS);
+        doReturn(Logger.getAnonymousLogger()).when(plugin).getLogger();
         VerificationStore store = store();
         UUID owner = UUID.randomUUID();
         store.authenticateIfAvailable(owner, "Owner", "123", "owner");
