@@ -24,6 +24,7 @@ MCAuth は、Minecraft サーバーへの初回接続時に Discord 認証を要
 - コード総当たり対策のための失敗回数制限
 - Discordサーバー退出時に連携を解除し、接続中なら即座に切断
 - Bot起動時に連携済みユーザーの在籍を確認し、停止中に退出した人の連携も解除
+- プロフィールページなど外部から、HTTP窓口でオークション・依頼を操作（任意・トークン設定時のみ）
 
 Bot起動時の在籍確認が終わるまでは、Minecraftへの入場と新規認証を拒否します。認証チャンネルのあるDiscordサーバーを対象に、キャッシュを使わずDiscord APIで確認します。通信・権限・DBエラーは退出として扱わず、認証データを残して再起動まで全員の入場を拒否します。
 
@@ -66,6 +67,12 @@ discord:
   channel-id: ""
   welcome-channel-id: "1449580988597403651"
   verified-role-id: ""
+  auction-channel-id: ""
+  request-channel-id: ""
+
+trade-api:
+  token: ""
+  port: 8111
 
 messages:
   welcome: "{mention} さん、認証が完了しました。ようこそ！"
@@ -84,6 +91,7 @@ auth:
 - `discord.channel-id`: 認証ボタンを置く Discord チャンネル ID。既定は空で、環境変数でも指定されていなければ認証・入場を受け付けません。Bot 起動時にボタン付きの案内を投稿し、以前の案内があれば書き換えます
 - `discord.verified-role-id`: 認証成功時に付けるロール ID。`/unlink` で連携を解除すると外します。空なら付けません
 - `discord.welcome-channel-id`: 認証成功後の歓迎メッセージの投稿先。既定は `1449580988597403651`。認証チャンネルと同じサーバー内のチャンネルを指定し、Botに閲覧・送信権限を付けてください。空なら投稿しません
+- `discord.auction-channel-id` / `discord.request-channel-id`: 廃止した市場パネルを消すためだけに使います。Bot起動時に直近50件から、Bot自身が投稿した `market:` で始まるボタン付きのメッセージを削除します。空なら認証サーバー内の同名チャンネル（「オークション取引」「依頼掲示板」）を探し、チャンネルの作成・削除はしません
 - `messages.welcome`: 歓迎メッセージの文面。既定は `{mention} さん、認証が完了しました。ようこそ！`。`{mention}` は本人へのメンションに置き換わります。空なら投稿しません。DB保存成功時だけ投稿し、失敗・連携済み・Bot再起動時には投稿しません。解除後に再認証した場合は再び投稿します。投稿に失敗しても認証は維持し、ログに記録します
 - `messages.panel`: 認証チャンネルに置く案内の本文
 - `auth.code-length`: 認証コードの桁数（4〜8、既定は4）
@@ -91,6 +99,8 @@ auth:
 - `auth.code-expire-seconds`: 認証コードの有効期限
 - `auth.max-invalid-attempts`: 何回間違えたら一時ロックするか
 - `auth.lockout-seconds`: 一時ロックする秒数
+- `trade-api.token`: 取引窓口の Bearer トークン。32文字以上を設定したときだけ起動します。環境変数 `MCAUTH_TRADE_API_TOKEN` がある場合はそちらを優先します
+- `trade-api.port`: 取引窓口の待ち受けポート。既定は `8111` で、`0.0.0.0` で待ち受けます
 
 ### 環境変数
 
@@ -100,6 +110,7 @@ auth:
 MCAUTH_DISCORD_TOKEN=Botのトークン
 MCAUTH_DISCORD_CHANNEL_ID=認証チャンネルID
 MCAUTH_DISCORD_VERIFIED_ROLE_ID=認証後に付けるロールID
+MCAUTH_TRADE_API_TOKEN=取引窓口のトークン（32文字以上）
 ```
 
 環境変数が未設定または空の場合は、`config.yml` にフォールバックします。`.env` ファイルを使う場合は、Paper を起動するシェルやサービスから環境変数として読み込んでください。MCAuth は `.env` ファイル自体を直接読みません。
@@ -122,6 +133,24 @@ Discord サーバー内のどのチャンネルでも `/unlink` を実行する�
 - 再連携する場合は Minecraft サーバーに接続し、表示された新しい認証コードを認証チャンネルのボタンから入力してください。
 
 `/unlink` はBot起動時に認証チャンネルのあるDiscordサーバーへ登録されるスラッシュコマンドです。結果は実行者本人だけに表示されます。Botの導入時は `applications.commands` スコープを含め、利用者に「アプリコマンドを使う」権限を付与してください。
+
+## 取引窓口（オークション・依頼）
+
+Discord の市場パネルは廃止しました。既存の `market:` ボタン付きメッセージは Bot 起動時に削除され、残っていた画面を押すと「この画面は終了しました。Discordの /profile から操作してください。」と本人だけに返します。取引はプロフィールページ（smp-api 経由）かゲーム内で行います。
+
+MCAuth は `trade-api.token`（または環境変数 `MCAUTH_TRADE_API_TOKEN`）が32文字以上のときだけ、`0.0.0.0:<trade-api.port>`（既定 `8111`）で HTTP 窓口を起動します。すべての要求に `Authorization: Bearer <トークン>` が必要で、違えば 401 を返します。
+
+- `GET /v1/trade?discord=<DiscordユーザーID 17〜20桁>`
+  - 未連携: `{"linked":false}`
+  - 連携済み: `{"linked":true,"auction":{"listings":[...],"staged":[...],"mine":[...],"bids":[...],"vault":[...]},"requests":{"open":[...],"mine":[...],"accepted":[...]}}`
+  - 各配列の要素は AuctionHouse / ContractBoard が返す文字列の項目です。プラグインが無効なら `auction` や `requests` は `null` になります。
+- `POST /v1/trade`（本文は4KiBまで）
+  - `{"discord":"<ID>","op":"bid|sell|cancel|accept","numbers":[整数...]}`
+  - `bid` は `[出品ID, 入札額]`、`sell` は `[預かりID, 開始価格, 即決価格, 時間]`、`cancel` は `[出品ID]`、`accept` は `[依頼ID]` です。
+  - 応答は `{"ok":true|false,"message":"日本語の文"}` です。`ok` は「入札しました」「即決価格で落札」「出品しました」「出品を取り消しました」で始まる文と、「依頼「…」を受諾しました。」を成功とします。
+  - 未連携なら `ok:false` と「Minecraftアカウントの認証を完了してください。」を返します。
+
+処理は必ずサーバーのメインスレッドで行い、5秒以内に終わらなければ 503 を返します。ロックダウン中・在籍確認中・停止中も 503、入力が不正なら 400 です。トークンは外部に公開しないでください。
 
 ## 保存されるデータ
 

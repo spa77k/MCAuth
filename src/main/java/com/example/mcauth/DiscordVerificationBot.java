@@ -117,7 +117,8 @@ final class DiscordVerificationBot extends ListenerAdapter {
                     // GUILD_MEMBERS は退出検知に使います。Privileged Intent のため、Developer Portal での有効化も必要です。
                     .enableIntents(GatewayIntent.GUILD_MEMBERS)
                     // このクラスのイベント処理メソッドが呼ばれるように登録します。
-                    .addEventListeners(this, new MarketPanels(plugin, channelId, verifiedRoleId))
+                    // 市場パネルは廃止したため、古いパネルの削除と案内だけを行うリスナーを足します。
+                    .addEventListeners(this, new LegacyMarketListener(plugin, channelId))
                     .build();
         } catch (RuntimeException exception) {
             // Token が間違っている、ネットワークに繋がらない等の場合はここに来ます。

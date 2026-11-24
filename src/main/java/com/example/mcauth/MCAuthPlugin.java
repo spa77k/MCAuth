@@ -7,11 +7,13 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.io.IOException;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.logging.Level;
@@ -35,6 +37,7 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     private static final String DISCORD_TOKEN_ENV = "MCAUTH_DISCORD_TOKEN";
     private static final String DISCORD_CHANNEL_ID_ENV = "MCAUTH_DISCORD_CHANNEL_ID";
     private static final String DISCORD_VERIFIED_ROLE_ID_ENV = "MCAUTH_DISCORD_VERIFIED_ROLE_ID";
+    private static final String TRADE_API_TOKEN_ENV = "MCAUTH_TRADE_API_TOKEN";
     private static final String ALREADY_LINKED_DISCORD_MESSAGE =
             "このDiscordアカウントは、すでに別のMinecraftアカウントと連携済みです。切り替えるには、先に /unlink で解除してください。";
     private static final String LOCKDOWN_MESSAGE =
@@ -59,6 +62,9 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     // Discord Bot を起動し、認証チャンネルのメッセージを監視する担当です。
     private DiscordVerificationBot discordBot;
 
+    // プロフィールページなど外部からオークション・依頼を操作する HTTP 窓口です。
+    private TradeApiServer tradeApi;
+
     // 認証コードの有効期限です。config.yml の auth.code-expire-seconds から読みます。
     private Duration codeLifetime;
 
@@ -77,11 +83,40 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     // Discordで認証成功時に送る文章です。
     private String verifiedMessage;
 
-    /** Discord の操作を認証済み本人としてメインスレッドの各プラグインへ渡す。 */
-    void marketCall(String discordId, String operation, int[] numbers, Consumer<Object> reply) {
+    /**
+     * 連携済みプレイヤーの出品・入札などをメインスレッドで集めます。
+     * 窓口が使えない状態では null を返し、HTTP 側で 503 にします。
+     */
+    void tradeQuery(String discordId, Consumer<Map<String, Object>> reply) {
         Bukkit.getScheduler().runTask(this, () -> {
-            if (lockdown || membershipCheckPending || shuttingDown || store == null) {
-                reply.accept("現在この操作を利用できません。");
+            if (tradeUnavailable()) {
+                reply.accept(null);
+                return;
+            }
+            try {
+                AuthenticatedPlayer player = store.findByDiscordUserId(discordId);
+                if (player == null) {
+                    reply.accept(Map.of("linked", false));
+                    return;
+                }
+                Map<String, Object> view = new LinkedHashMap<>();
+                view.put("linked", true);
+                view.put("auction", auctionSnapshot(player));
+                view.put("requests", requestSnapshot(player));
+                reply.accept(view);
+            } catch (IllegalStateException exception) {
+                // DBを読めないときは、連携の有無を誤って返さないよう利用不可にします。
+                getLogger().log(Level.SEVERE, "取引窓口の一覧取得に失敗しました", exception);
+                reply.accept(null);
+            }
+        });
+    }
+
+    /** 取引の操作を認証済み本人としてメインスレッドの各プラグインへ渡します。 */
+    void tradeOperation(String discordId, String operation, int[] numbers, Consumer<Object> reply) {
+        Bukkit.getScheduler().runTask(this, () -> {
+            if (tradeUnavailable()) {
+                reply.accept(null);
                 return;
             }
             try {
@@ -90,9 +125,9 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
                     reply.accept("Minecraftアカウントの認証を完了してください。");
                     return;
                 }
-                boolean auction = !operation.equals("requests") && !operation.equals("accept");
-                Plugin target = Bukkit.getPluginManager().getPlugin(auction ? "AuctionHouse" : "ContractBoard");
-                if (target == null || !target.isEnabled()) {
+                boolean auction = !operation.equals("accept");
+                Plugin target = enabledMarketPlugin(auction);
+                if (target == null) {
                     reply.accept("この機能は現在利用できません。");
                     return;
                 }
@@ -100,9 +135,6 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
                 Class<?>[] signature;
                 Object[] arguments;
                 switch (operation) {
-                    case "listings" -> { methodName = "discordListings"; signature = new Class<?>[0]; arguments = new Object[0]; }
-                    case "staged" -> { methodName = "discordStaged"; signature = new Class<?>[]{UUID.class}; arguments = new Object[]{player.uuid()}; }
-                    case "requests" -> { methodName = "discordOpenRequests"; signature = new Class<?>[0]; arguments = new Object[0]; }
                     case "bid" -> {
                         methodName = "discordBid";
                         signature = new Class<?>[]{UUID.class, String.class, int.class, int.class};
@@ -113,6 +145,11 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
                         signature = new Class<?>[]{UUID.class, String.class, int.class, int.class, int.class, int.class};
                         arguments = new Object[]{player.uuid(), player.playerName(), numbers[0], numbers[1], numbers[2], numbers[3]};
                     }
+                    case "cancel" -> {
+                        methodName = "discordCancel";
+                        signature = new Class<?>[]{UUID.class, String.class, int.class};
+                        arguments = new Object[]{player.uuid(), player.playerName(), numbers[0]};
+                    }
                     case "accept" -> {
                         methodName = "discordAccept";
                         signature = new Class<?>[]{UUID.class, String.class, int.class};
@@ -122,29 +159,67 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
                 }
                 Method method = target.getClass().getMethod(methodName, signature);
                 reply.accept(method.invoke(target, arguments));
+            } catch (IllegalStateException exception) {
+                getLogger().log(Level.SEVERE, "取引窓口のDB読み取りに失敗しました", exception);
+                reply.accept(null);
             } catch (Exception exception) {
-                getLogger().log(Level.WARNING, "Discordからの取引に失敗しました", exception);
+                getLogger().log(Level.WARNING, "取引窓口からの取引に失敗しました", exception);
                 reply.accept("取引に失敗しました。時間をおいて再度お試しください。");
             }
         });
     }
 
-    void marketPublicList(String operation, Consumer<Object> reply) {
-        Bukkit.getScheduler().runTask(this, () -> {
-            try {
-                String pluginName = operation.equals("listings") ? "AuctionHouse" : "ContractBoard";
-                String methodName = operation.equals("listings") ? "discordListings" : "discordOpenRequests";
-                Plugin target = Bukkit.getPluginManager().getPlugin(pluginName);
-                if (target == null || !target.isEnabled()) {
-                    reply.accept(java.util.List.of());
-                    return;
-                }
-                reply.accept(target.getClass().getMethod(methodName).invoke(target));
-            } catch (Exception exception) {
-                getLogger().log(Level.WARNING, "Discord用一覧の取得に失敗しました", exception);
-                reply.accept(java.util.List.of());
-            }
-        });
+    private boolean tradeUnavailable() {
+        return lockdown || membershipCheckPending || shuttingDown || store == null;
+    }
+
+    private static Plugin enabledMarketPlugin(boolean auction) {
+        Plugin target = Bukkit.getPluginManager().getPlugin(auction ? "AuctionHouse" : "ContractBoard");
+        return target != null && target.isEnabled() ? target : null;
+    }
+
+    private Map<String, Object> auctionSnapshot(AuthenticatedPlayer player) {
+        Plugin target = enabledMarketPlugin(true);
+        if (target == null) {
+            return null;
+        }
+        try {
+            Map<String, Object> view = new LinkedHashMap<>();
+            view.put("listings", tradeList(target, "discordListings", new Class<?>[0]));
+            view.put("staged", tradeList(target, "discordStaged", new Class<?>[]{UUID.class}, player.uuid()));
+            view.put("mine", tradeList(target, "discordMyListings", new Class<?>[]{UUID.class}, player.uuid()));
+            view.put("bids", tradeList(target, "discordMyBids", new Class<?>[]{UUID.class}, player.uuid()));
+            view.put("vault", tradeList(target, "discordVault", new Class<?>[]{UUID.class}, player.uuid()));
+            return view;
+        } catch (ReflectiveOperationException exception) {
+            getLogger().log(Level.WARNING, "AuctionHouse の取引一覧を取得できませんでした", exception);
+            return null;
+        }
+    }
+
+    private Map<String, Object> requestSnapshot(AuthenticatedPlayer player) {
+        Plugin target = enabledMarketPlugin(false);
+        if (target == null) {
+            return null;
+        }
+        try {
+            Map<String, Object> view = new LinkedHashMap<>();
+            view.put("open", tradeList(target, "discordOpenRequests", new Class<?>[0]));
+            view.put("mine", tradeList(target, "discordMyRequests", new Class<?>[]{UUID.class}, player.uuid()));
+            view.put("accepted", tradeList(target, "discordMyAccepted", new Class<?>[]{UUID.class}, player.uuid()));
+            return view;
+        } catch (ReflectiveOperationException exception) {
+            getLogger().log(Level.WARNING, "ContractBoard の取引一覧を取得できませんでした", exception);
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, String>> tradeList(
+            Plugin target, String methodName, Class<?>[] signature, Object... arguments
+    ) throws ReflectiveOperationException {
+        Object value = target.getClass().getMethod(methodName, signature).invoke(target, arguments);
+        return value instanceof List<?> list ? (List<Map<String, String>>) list : List.of();
     }
 
     @Override
@@ -158,6 +233,8 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
 
         try {
             setUp();
+            // 認証と入場判定の準備ができてから、取引窓口を起動します。
+            startTradeApi();
         } catch (RuntimeException exception) {
             // プラグインを止めると誰でも入れてしまうため、止めずに全員の入場を拒否し続けます。
             getLogger().log(Level.SEVERE, "MCAuth failed to start. All players will be denied until the server restarts.", exception);
@@ -198,6 +275,12 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     @Override
     public void onDisable() {
         shuttingDown = true;
+        // 取引窓口を先に止め、DBを閉じた後にメインスレッドの処理を待たせないようにします。
+        if (tradeApi != null) {
+            tradeApi.stop();
+            tradeApi = null;
+        }
+
         // サーバー停止・プラグイン無効化時に Discord Bot を停止します。
         if (discordBot != null) {
             discordBot.stop();
@@ -377,6 +460,26 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         // Discord へ接続します。
         membershipCheckPending = true;
         discordBot.start(token);
+    }
+
+    private void startTradeApi() {
+        // 環境変数を優先し、未設定なら config.yml へフォールバックします。
+        String token = environmentOrConfig(TRADE_API_TOKEN_ENV, "trade-api.token", "").trim();
+        if (!TradeApiServer.tokenLongEnough(token)) {
+            getLogger().info("Trade API token is not configured. Set MCAUTH_TRADE_API_TOKEN or trade-api.token (32 characters or more) to enable the trade API.");
+            return;
+        }
+        int port = getConfig().getInt("trade-api.port", 8111);
+        try {
+            TradeApiServer created = new TradeApiServer(this, token, port);
+            created.start();
+            tradeApi = created;
+            getLogger().info("Trade API listening on 0.0.0.0:" + created.port());
+        } catch (IOException | RuntimeException exception) {
+            // 窓口が起動できなくても、認証と入場判定は続けます。
+            tradeApi = null;
+            getLogger().log(Level.WARNING, "Failed to start trade API on port " + port, exception);
+        }
     }
 
     void reconcileDiscordMembership(Function<String, CompletableFuture<Boolean>> membershipLookup) {
