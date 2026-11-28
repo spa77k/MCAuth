@@ -221,7 +221,7 @@ final class TradeApiServer {
     /** op ごとに決まった個数の整数だけを受け付けます。合わなければ null を返します。 */
     static int[] numbers(String operation, JsonNode values) {
         int expected = switch (operation) {
-            case "bid" -> 2;
+            case "bid", "photo" -> 2;
             case "sell" -> 4;
             case "cancel", "accept" -> 1;
             default -> -1;
@@ -245,7 +245,9 @@ final class TradeApiServer {
      * 「出品を取り消しました」で始まる応答だけを、取り消し成功として追加しています。
      */
     static boolean isSuccess(String message) {
-        return message.startsWith("入札しました")
+        return message.equals(PhotoPrizes.PAID)
+                || message.equals(PhotoPrizes.ALREADY_PAID)
+                || message.startsWith("入札しました")
                 || message.startsWith("即決価格で落札")
                 || message.startsWith("出品しました")
                 || message.startsWith("出品を取り消しました")

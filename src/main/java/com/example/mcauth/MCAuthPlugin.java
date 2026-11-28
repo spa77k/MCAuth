@@ -59,6 +59,9 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
     // 認証済みプレイヤーを mcauth.db（SQLite）に保存・参照する担当です。
     private VerificationStore store;
 
+    // 写真館の賞金の支払い。DBを開いた後に用意します。
+    private PhotoPrizes photoPrizes;
+
     // Discord Bot を起動し、認証チャンネルのメッセージを監視する担当です。
     private DiscordVerificationBot discordBot;
 
@@ -125,6 +128,11 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
                     reply.accept("Minecraftアカウントの認証を完了してください。");
                     return;
                 }
+                if (operation.equals("photo")) {
+                    // 写真館の賞金。今は払えないとき（null）は503にして、呼び出し側に払い直させます。
+                    reply.accept(photoPrizes == null ? null : photoPrizes.pay(player, numbers[0], numbers[1]));
+                    return;
+                }
                 boolean auction = !operation.equals("accept");
                 Plugin target = enabledMarketPlugin(auction);
                 if (target == null) {
@@ -167,6 +175,23 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
                 reply.accept("取引に失敗しました。時間をおいて再度お試しください。");
             }
         });
+    }
+
+    /** Vault の経済の提供元（SpaCoin）へ入金します。MCAuth は Vault に依存しないため、リフレクションで呼びます。 */
+    private boolean depositVault(UUID uuid, double amount) throws ReflectiveOperationException {
+        for (Class<?> service : Bukkit.getServicesManager().getKnownServices()) {
+            if (!service.getName().equals("net.milkbowl.vault.economy.Economy")) {
+                continue;
+            }
+            var registration = Bukkit.getServicesManager().getRegistration(service);
+            if (registration == null) {
+                return false;
+            }
+            Object response = service.getMethod("depositPlayer", org.bukkit.OfflinePlayer.class, double.class)
+                    .invoke(registration.getProvider(), Bukkit.getOfflinePlayer(uuid), amount);
+            return response != null && Boolean.TRUE.equals(response.getClass().getMethod("transactionSuccess").invoke(response));
+        }
+        return false;
     }
 
     private boolean tradeUnavailable() {
@@ -246,6 +271,8 @@ public final class MCAuthPlugin extends JavaPlugin implements Listener {
         // 認証データのDB（mcauth.db）を開きます。開けないと入場判定ができないため、例外にして全員拒否にします。
         store = new VerificationStore(this);
         store.load();
+        photoPrizes = new PhotoPrizes(store, this::depositVault,
+                getDataFolder().toPath().resolve("prizes.log"), getLogger());
 
         // 設定値を読み込みます。危険な値にならないよう、最低値や範囲を補正しています。
         codeLifetime = Duration.ofSeconds(Math.max(1, getConfig().getLong("auth.code-expire-seconds", 300)));

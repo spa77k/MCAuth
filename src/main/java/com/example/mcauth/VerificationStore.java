@@ -105,6 +105,33 @@ final class VerificationStore implements AutoCloseable {
         }
     }
 
+    /** 写真館の賞金を払う権利を取ります。同じ週・同じDiscord IDが既にあれば false です。 */
+    synchronized boolean claimPhotoPrize(int week, String discordUserId, UUID uuid, int amount) {
+        try (PreparedStatement statement = connection().prepareStatement(
+                "INSERT OR IGNORE INTO photo_prizes (week, discord_user_id, uuid, amount, paid_at) VALUES (?, ?, ?, ?, ?)")) {
+            statement.setInt(1, week);
+            statement.setString(2, discordUserId);
+            statement.setString(3, uuid.toString());
+            statement.setInt(4, amount);
+            statement.setLong(5, System.currentTimeMillis());
+            return statement.executeUpdate() == 1;
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Failed to save photo prize", exception);
+        }
+    }
+
+    /** 所持金へ入れられなかったときに、取った権利を戻します。 */
+    synchronized void releasePhotoPrize(int week, String discordUserId) {
+        try (PreparedStatement statement = connection().prepareStatement(
+                "DELETE FROM photo_prizes WHERE week = ? AND discord_user_id = ?")) {
+            statement.setInt(1, week);
+            statement.setString(2, discordUserId);
+            statement.executeUpdate();
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Failed to release photo prize", exception);
+        }
+    }
+
     // 認証の保存結果です。
     enum AuthenticationResult {
         SAVED,
@@ -192,6 +219,14 @@ final class VerificationStore implements AutoCloseable {
                         + "name TEXT NOT NULL, "
                         + "discord_user_id TEXT NOT NULL UNIQUE, "
                         + "discord_user_name TEXT NOT NULL)");
+                // 写真館の賞金の支払い済み記録です。週とDiscord IDで二重払いを防ぎます。
+                statement.executeUpdate("CREATE TABLE IF NOT EXISTS photo_prizes ("
+                        + "week INTEGER NOT NULL, "
+                        + "discord_user_id TEXT NOT NULL, "
+                        + "uuid TEXT NOT NULL, "
+                        + "amount INTEGER NOT NULL, "
+                        + "paid_at INTEGER NOT NULL, "
+                        + "PRIMARY KEY (week, discord_user_id))");
             } catch (SQLException exception) {
                 opened.close();
                 throw exception;
